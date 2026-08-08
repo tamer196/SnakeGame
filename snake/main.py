@@ -18,6 +18,7 @@ effects possible at all.
 from __future__ import annotations
 
 import importlib
+import os
 import sys
 import traceback
 from typing import Any, Dict, List, Optional, Tuple
@@ -46,17 +47,32 @@ class Game:
     def __init__(self, headless: bool = False) -> None:
         self.headless = headless
 
+        # A headless run still needs a *video mode*: SDL refuses to hand out a
+        # pixel format for Surface.convert() until one exists, and every glow
+        # cache in gfx/ leans on convert()/convert_alpha().  The dummy drivers
+        # give us one without a window or a sound device.  These have to be set
+        # before pygame.init(), which is why they live here and not in the
+        # caller.
+        if headless:
+            os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+            os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+
         pygame.init()
         pygame.display.set_caption(f"{C.GAME_TITLE} - {C.GAME_SUBTITLE}")
 
         flags = 0
-        if headless:
-            self.screen = pygame.Surface(C.WINDOW_SIZE)
-        else:
+        try:
             self.screen = pygame.display.set_mode(C.WINDOW_SIZE, flags)
+        except pygame.error:
+            # No video device at all (a locked-down CI box).  Everything still
+            # renders, just without the convert() fast path.
+            self.screen = pygame.Surface(C.WINDOW_SIZE)
 
         # Scenes draw here; the effect stack composites it onto `screen`.
-        self.canvas = pygame.Surface(C.WINDOW_SIZE).convert()
+        try:
+            self.canvas = pygame.Surface(C.WINDOW_SIZE).convert()
+        except pygame.error:
+            self.canvas = pygame.Surface(C.WINDOW_SIZE)
 
         self.clock = pygame.time.Clock()
         self.running = True

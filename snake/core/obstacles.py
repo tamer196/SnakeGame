@@ -140,6 +140,63 @@ def _glow_line(surface: pygame.Surface, ax: float, ay: float,
                   radius, color, intensity)
 
 
+_SLAB_GLOW_CACHE: Dict[Tuple[int, int, int, int, int, int, int], pygame.Surface] = {}
+
+
+def _slab_glow_sprite(w: int, h: int, radius: int, color: Sequence[int],
+                      intensity: float) -> pygame.Surface:
+    """
+    A rounded-rectangle halo: the slab equivalent of ``_glow_sprite``.
+
+    Nested rounded rects are painted outside-in with the same ``(1 - f) ** 1.9``
+    alpha ramp the radial sprite uses, so a wall and a pulsar glow the same way.
+    Cached on the slab's size, colour and quantised intensity, which for a
+    breathing wall is a handful of surfaces for the whole level.
+    """
+    col = (int(color[0]) & 255, int(color[1]) & 255, int(color[2]) & 255)
+    key = (w, h, radius, col[0], col[1], col[2], int(clamp(intensity, 0.0, 2.0) * 8.0))
+    surf = _SLAB_GLOW_CACHE.get(key)
+    if surf is not None:
+        return surf
+    if len(_SLAB_GLOW_CACHE) > GLOW_CACHE_LIMIT:
+        _SLAB_GLOW_CACHE.clear()
+
+    inten = clamp(intensity, 0.0, 2.0)
+    surf = pygame.Surface((w + radius * 2, h + radius * 2), pygame.SRCALPHA)
+    steps = int(clamp(radius * 0.6, 6, 18))
+    for i in range(steps, 0, -1):
+        f = i / steps
+        a = P.clamp8(255.0 * inten * (1.0 - f) ** 1.9)
+        if a <= 0:
+            continue
+        pad = radius * f
+        rect = pygame.Rect(int(radius - pad), int(radius - pad),
+                           int(w + pad * 2), int(h + pad * 2))
+        pygame.draw.rect(surf, (col[0], col[1], col[2], a), rect,
+                         border_radius=int(min(rect.w, rect.h) * 0.5))
+    _SLAB_GLOW_CACHE[key] = surf
+    return surf
+
+
+def _slab_glow(surface: pygame.Surface, x: float, y: float, w: float, h: float,
+               color: Sequence[int], intensity: float = 1.0) -> None:
+    """
+    Halo for a rectangular hazard, shaped like the hazard.
+
+    A single radial glow sized from the slab's *longest* side is fine for a
+    40x40 block and catastrophic for a 20x377 px wall: it becomes a 234 px disc
+    that swallows half the arena and hides the geometry the player has to read.
+    Here the falloff distance comes from the short side - the visual thickness
+    of the neon - and the halo takes the slab's own shape, so a long wall glows
+    like a strip light instead of like a bomb.
+    """
+    iw, ih = max(2, int(w)), max(2, int(h))
+    radius = int(clamp(min(iw, ih) * 0.75 + 12.0, 14.0, 64.0))
+    sprite = _slab_glow_sprite(iw, ih, radius, color, intensity)
+    surface.blit(sprite, (int(x) - radius, int(y) - radius),
+                 special_flags=pygame.BLEND_RGB_ADD)
+
+
 def _neon_line(surface: pygame.Surface, ax: float, ay: float,
                bx: float, by: float, color: Sequence[int], width: float,
                *, core: float = 0.7) -> None:
@@ -310,8 +367,8 @@ class WallBlock(Obstacle):
                                  (x0, y1, 1, -1), (x1, y1, -1, -1)):
             pygame.draw.line(surface, theme.accent2, (px, py), (px + dx * c, py), 2)
             pygame.draw.line(surface, theme.accent2, (px, py), (px, py + dy * c), 2)
-        _add_glow(surface, self.x + self.w * 0.5, self.y + self.h * 0.5,
-                  max(self.w, self.h) * 0.62, theme.hazard, 0.20 + glow * 0.16)
+        _slab_glow(surface, self.x, self.y, self.w, self.h,
+                   theme.hazard, 0.20 + glow * 0.16)
 
 
 # ==========================================================================
@@ -401,8 +458,7 @@ class MovingBar(Obstacle):
         for i in (3, 2, 1):
             gx = self.x + (back * i * 7.0 if self.axis == "x" else 0.0)
             gy = self.y + (back * i * 7.0 if self.axis == "y" else 0.0)
-            _add_glow(surface, gx + self.w * 0.5, gy + self.h * 0.5,
-                      max(self.w, self.h) * 0.42, theme.accent2, 0.10 / i)
+            _slab_glow(surface, gx, gy, self.w, self.h, theme.accent2, 0.10 / i)
 
         surface.blit(self._slab, (int(self.x), int(self.y)))
         pygame.draw.rect(surface, P.lerp_color(theme.accent2, (255, 255, 255),
@@ -424,7 +480,7 @@ class MovingBar(Obstacle):
                 tipy = oy + self.dir * k
                 pygame.draw.lines(surface, col, False,
                                   [(cx - k, oy), (cx, tipy), (cx + k, oy)], 2)
-        _add_glow(surface, cx, cy, max(self.w, self.h) * 0.55, theme.hazard, 0.22)
+        _slab_glow(surface, self.x, self.y, self.w, self.h, theme.hazard, 0.22)
 
 
 # ==========================================================================

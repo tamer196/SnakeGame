@@ -226,4 +226,7 @@ DEFAULT_DIFFICULTY = DIFF_NORMAL
 # Debug switches
 # --------------------------------------------------------------------------
 DEBUG_HITBOXES = False
-SHOW_FPS = True
+# The FPS overlay draws at the window's top-right, which collides with the
+# level-select star readout and the difficulty badge.  Off by default; use
+# tools/frame_budget.py for real profiling, which measures per stage anyway.
+SHOW_FPS = False

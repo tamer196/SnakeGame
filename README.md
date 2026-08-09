@@ -12,6 +12,9 @@ whole screen glows.
   <img src="docs/media/abyssal-tide.png" width="49%" alt="Abyssal Tide" />
   <img src="docs/media/prism-core.png" width="49%" alt="Prism Core" />
   <img src="docs/media/level-select.png" width="49%" alt="Level select" />
+  <img src="docs/media/mode-select.png" width="49%" alt="Story or free play" />
+  <img src="docs/media/story.png" width="49%" alt="A story chapter card" />
+  <img src="docs/media/settings.png" width="49%" alt="Settings" />
 </p>
 
 ---
@@ -36,10 +39,46 @@ The entire game is playable with the mouse alone.
 | **Move mouse** | Steer the snake — the head turns toward the cursor |
 | **Hold right button** | Boost (burns stamina, regenerates when released) |
 | **Left click** | Menus, buttons, level select, confirmations |
-| **`Esc` / `P`** | Pause (keyboard shortcut only; pause is also a HUD button) |
+| **`Esc` / `P`** | Pause (also a HUD button) |
+| **`F11` / `Alt`+`Enter`** | Toggle fullscreen |
 
-Steering is rate-limited, so the snake banks into turns instead of snapping.
+Steering holds a **constant turn radius** rather than a constant turn rate.
+That distinction matters: with a fixed rate, radius is `speed / rate`, so the
+faster you go the wider you turn — a late-game U-turn used to sweep a 194px
+circle. Now a hairpin is 40–76px at every speed in the game.
+
+Because a hairpin brings the head back over its own neck, the snake **crosses
+over itself** instead of dying, and the renderer draws the overlap as an
+overpass so you can see it went *over*. How forgiving that is depends on
+difficulty.
+
 Park the cursor on the head and it holds its line.
+
+---
+
+## Difficulty
+
+| | Lives | Speed | Your own body |
+| --- | --- | --- | --- |
+| **Easy** | 5 | 0.82× | Cannot kill you |
+| **Normal** | 3 | 1.00× | Forgiving |
+| **Hard** | 2 | 1.15× | Punishing |
+| **Expert** | 1 | 1.30× | Unforgiving |
+
+Difficulty also drives hazard speed, power-up frequency, mercy invulnerability,
+star thresholds and scoring. Best scores and stars are tracked **separately per
+difficulty**, so a three-star Easy clear never overwrites a two-star Expert one.
+
+---
+
+## Two ways to play
+
+**Story mode** runs the twelve levels in order as a four-chapter descent, with
+narrative beats before and after each one and a chapter card at every act
+break. It remembers where you were.
+
+**Free play** lets you jump straight to any level you've unlocked and replay it
+at any difficulty.
 
 ---
 
@@ -75,10 +114,15 @@ saves to `savegame.json` beside the launcher.
 ## Features
 
 - **Continuous slither movement** — a path-following body, not a grid of squares
-- **Neon rendering** — additive glow, gradient bodies, bloom and vignette
+- **Constant-radius steering** — hairpins feel identical at every speed
+- **Cross-over** — pass over your own body instead of dying to a tight turn
+- **Four difficulties** and **two modes**, with per-difficulty records
+- **Any window size, or fullscreen** — a fixed virtual canvas is scaled and
+  letterboxed, and mouse input is mapped back, so layout never breaks
+- **Neon rendering** — additive glow, gradient bodies, real bloom, CRT curvature
 - **Particle systems** — head trails, pickup bursts, ambient motes, death sprays
-- **Animated backgrounds** — a distinct procedural style per stage
-- **Screen feedback** — shake, flash, chromatic aberration on impact
+- **Animated backgrounds** — three parallax layers and a signature element per stage
+- **Screen feedback** — directional shake, flash, chromatic aberration on impact
 - **Power-ups** — magnet, shield, slow-motion, score multiplier and more
 - **Combo scoring** — chain pickups inside the combo window for escalating bonuses
 - **Stamina-gated boost** — speed costs something
@@ -113,18 +157,24 @@ Everything runs without a display, so the game is testable in CI.
 
 ```bash
 python tools/smoke_modules.py   # ~150 assertions across every module
-python tools/playtest.py        # drives the game like a player, 101 checks
+python tools/playtest.py        # drives the game like a player, 301 checks
+python tools/turn_test.py       # steering geometry and difficulty, 112 checks
+python tools/frame_budget.py    # per-stage frame cost across all 12 levels
 python tools/screenshot.py      # renders every scene and level to captures/
 ```
 
 `playtest.py` is the interesting one: it clicks through the menus, pilots the
 snake at the nearest orb until level 1 is cleared, verifies stars and unlocks
-reached the save file, forces a death, and sweeps all twelve levels. It also
-watches four invariants — non-finite positions, leaked clip rects, anything
-painting over the HUD, and exceptions swallowed by a scene's frame guard — and
-proves each detector works by deliberately breaking it for one frame.
+reached the save file, forces a death, plays a level on each difficulty, walks
+the whole story hand-off, and sweeps all twelve levels. It walks **66 buttons
+across 12 screens** asserting none is a dead end, and watches five invariants —
+non-finite positions, leaked clip rects, anything painting over the HUD,
+exceptions swallowed by a scene's frame guard, and controls rendered
+unreadable by the CRT bezel — proving each detector works by deliberately
+breaking it for one frame.
 
-Frame budget at 1280×720 is 16.6 ms; the worst level measures ~9 ms p95.
+Frame budget at 1280×720 is 16.6 ms; the worst level measures ~12.6 ms
+corrected p95.
 
 ---
 

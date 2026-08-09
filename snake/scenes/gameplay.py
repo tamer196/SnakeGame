@@ -15,16 +15,40 @@ Structure of a frame
             block containing the snake and the particles -> score popups -> HUD
             -> the READY overlay.
 
-Two invariants are load-bearing and easy to break:
+Three invariants are load-bearing and easy to break:
 
 *   ``draw_snake`` and ``ParticleSystem.draw`` take no rect, so they are wrapped
     in ``surface.set_clip(arena)`` (restored in a ``finally``).  Everything else
     that draws into the arena clips itself.
-*   ``snake.speed`` carries the level's cruise speed (base + per-level step) and
-    nothing else.  ``level.speed_mult`` is a *separate* factor and is passed to
+*   ``snake.speed`` carries the level's cruise speed (base + per-level step)
+    scaled by the difficulty's ``speed_mult`` and nothing else.
+    ``level.speed_mult`` is a *separate* factor and is passed to
     ``snake.update`` alongside the power-up multipliers; that is what
     ``LevelDef.base_speed()`` documents and what ``Snake._update_boost``'s
-    ``speed_mult`` parameter exists for.
+    ``speed_mult`` parameter exists for.  Dropping it would leave the campaign's
+    1.00 -> 1.70 pace ramp as dead data.
+*   Hazards run on their own clock (``hazard_t``), which advances at
+    ``diff.hazard_speed_mult`` times the simulation clock.  Obstacles animate
+    from the absolute time value they are handed, so scaling only ``dt`` would
+    change nothing at all.
+
+Difficulty
+----------
+``core.difficulty`` owns every balance number this screen used to hard-code:
+lives, speed, steering, self-collision, mercy invulnerability, the combo
+window, the power-up spawn cadence, food scoring and the star ladder.  The row
+is resolved once in :meth:`GameplayScene.on_enter` and cached on the scene, so
+a mid-run difficulty change in the settings screen cannot half-apply.  NORMAL
+is the identity row, so a normal run plays exactly as it did in v1.
+
+Story mode
+----------
+When ``game.mode`` is ``C.MODE_STORY`` the READY card shows the level's story
+beat instead of the level's own name, and clearing the level pushes
+``save.set_story_progress``.  The scene never routes the story itself: it
+always hands off to ``C.SCENE_VICTORY`` on a clear and ``C.SCENE_GAMEOVER`` on
+a death, and leaves the narrative hand-off to ``VictoryScene`` - which reads
+the chapter / beat keys this scene writes into ``game.last_result``.
 
 Nothing in ``update`` or ``draw`` may raise.
 """
@@ -38,7 +62,10 @@ import pygame
 
 from .. import config as C
 from .. import palette as P
+from ..core import difficulty as diffmod
+from ..core import story as storymod
 from ..core.contracts import Scene, TAU, angle_to, clamp, ease_out_cubic
+from ..core.difficulty import Difficulty
 from ..core.food import Food, FoodField, food_color
 from ..core.level import LEVEL_COUNT, LevelDef, get_level
 from ..core.obstacles import (Obstacle, Portal, build_obstacles, draw_obstacles,
@@ -89,6 +116,18 @@ POPUP_RISE: float = -64.0           # pixels / second, upward
 
 BLINK_HZ: float = 7.0               # invulnerability blink frequency
 
+# --------------------------------------------------------------------------
+# Cross-over feedback
+# --------------------------------------------------------------------------
+# The snake can now hairpin over its own neck and survive it (see
+# ``Snake.crossing_self``).  That is a *mechanic*, not a near-miss, so it gets
+# real feedback: a soft whoosh, a wash of sparks under the head for as long as
+# the overlap lasts, and - the first time it happens in a level - a short
+# slow-motion tick plus a label, so the player is told once and then trusted.
+CROSS_SOUND_COOLDOWN: float = 0.55  # seconds between two whooshes
+CROSS_WASH_RATE: float = 62.0       # particles / second while crossing
+CROSS_TEACH_SLOWMO: Tuple[float, float] = (0.55, 0.24)   # (time scale, seconds)
+
 #: Pause button, parked in the empty slot of the HUD strip between the combo
 #: badge (x ~840) and the boost bar (x 958).
 PAUSE_RECT: Tuple[int, int, int, int] = (886, 32, 70, 38)
@@ -138,6 +177,20 @@ class GameplayScene(Scene):
 
         self.arena: pygame.Rect = pygame.Rect(*C.ARENA_RECT)
 
+        # -- difficulty / mode (re-resolved by every on_enter) --------------
+        self.diff: Difficulty = diffmod.get_difficulty(None)
+        self.story_mode: bool = False
+        self.beat: Optional[storymod.StoryBeat] = None
+        self.chapter: Optional[storymod.Chapter] = None
+        #: Cached difficulty-derived numbers, so the hot loop never re-derives.
+        self.self_enabled: bool = True
+        self.self_skip: int = int(C.SELF_COLLISION_SKIP)
+        self.self_depth: float = float(C.SELF_COLLISION_DEPTH)
+        self.invuln_time: float = float(C.INVULN_AFTER_HIT)
+        self.combo_window: float = float(C.COMBO_WINDOW)
+        self.hazard_mult: float = 1.0
+        self.star_targets: Tuple[int, int, int] = (1, 2, 3)
+
         # -- level ---------------------------------------------------------
         self.level: LevelDef = get_level(0)
         self.theme: P.Theme = self.level.theme
@@ -164,6 +217,7 @@ class GameplayScene(Scene):
         self.last_pickup_t: float = -999.0
         self.elapsed: float = 0.0
         self.clock_t: float = 0.0           # simulation clock (slow-mo aware)
+        self.hazard_t: float = 0.0          # hazard clock (difficulty-scaled)
         self.ready_timer: float = READY_TIME
         self.go_timer: float = 0.0
         self.portal_lock: float = 0.0
@@ -171,6 +225,12 @@ class GameplayScene(Scene):
         self.popups: List[_Popup] = []
         self._was_boosting: bool = False
         self._key_boost: bool = False
+
+        # -- cross-over feedback -------------------------------------------
+        self._was_crossing: bool = False
+        self._cross_cool: float = 0.0
+        self._cross_taught: bool = False
+        self._cross_count: int = 0
 
         self.pause_button: Button = self._make_pause_button()
 
@@ -184,6 +244,69 @@ class GameplayScene(Scene):
         except Exception:
             font = None
         return Button(pygame.Rect(*PAUSE_RECT), "PAUSE", font=font, style="ghost")
+
+    def _resolve_difficulty(self) -> None:
+        """
+        Pull the whole balance table onto the scene, once per run.
+
+        Every one of these helpers is total - a missing, stale or garbage
+        ``game.difficulty`` resolves to NORMAL rather than raising - so the
+        block needs no guard of its own beyond the one on the attribute read.
+        """
+        key = getattr(self.game, "difficulty", None)
+        self.diff = diffmod.get_difficulty(key)
+        self.self_enabled = diffmod.self_collision_enabled(self.diff)
+        self.self_skip = diffmod.self_collision_skip(self.diff)
+        self.self_depth = diffmod.self_collision_depth(self.diff)
+        self.invuln_time = diffmod.invuln_seconds(self.diff)
+        self.combo_window = diffmod.combo_window(self.diff)
+        try:
+            self.hazard_mult = max(0.05, float(self.diff.hazard_speed_mult))
+        except (TypeError, ValueError):     # pragma: no cover - table is sane
+            self.hazard_mult = 1.0
+        self.star_targets = diffmod.apply_star_targets(self.diff,
+                                                       self.level.star_targets())
+
+    def _resolve_story(self) -> None:
+        """Cache this level's narrative beat when the run is a story run."""
+        self.story_mode = (getattr(self.game, "mode", C.MODE_FREE)
+                           == C.MODE_STORY)
+        self.beat = None
+        self.chapter = None
+        if not self.story_mode:
+            return
+        try:
+            self.beat = storymod.get_beat(self.level.index)
+            self.chapter = storymod.get_chapter(self.level.index)
+        except Exception:       # pragma: no cover - story accessors are total
+            self.beat = None
+            self.chapter = None
+
+    def _apply_powerup_rate(self) -> None:
+        """
+        Bend the rune field's spawn cadence to the difficulty.
+
+        ``PowerUpField`` rolls its own intervals straight out of ``config``, so
+        the only way to make EASY generous and EXPERT stingy without editing a
+        file this scene does not own is to swap the roller on the *instance*
+        (an instance attribute shadows the class method, and ``maybe_spawn``
+        calls it through ``self``).  The pending timer is re-rolled with it, so
+        the very first rune already respects the new cadence.
+        """
+        field = self.runes
+        if field is None:
+            return
+        lo, hi = diffmod.powerup_spawn_range(self.diff)
+        rng = field.rng
+
+        def roll_interval() -> float:
+            return rng.uniform(lo, hi)
+
+        try:
+            field._roll_interval = roll_interval       # type: ignore[assignment]
+            field._timer = roll_interval() * rng.uniform(0.55, 1.0)
+        except Exception:       # pragma: no cover - defensive only
+            pass
 
     def _blocked_at(self, x: float, y: float, r: float) -> bool:
         """True when a circle at (x, y) touches anything lethal."""
@@ -290,6 +413,13 @@ class GameplayScene(Scene):
         self.theme = self.level.theme
         self.arena = pygame.Rect(*C.ARENA_RECT)
 
+        # -- difficulty + mode ---------------------------------------------
+        # Resolved before anything that reads them is built, and re-resolved on
+        # every entry so a change made in the settings screen lands on the very
+        # next run rather than the one after it.
+        self._resolve_difficulty()
+        self._resolve_story()
+
         # -- world ---------------------------------------------------------
         try:
             game.fx.set_theme(self.theme)
@@ -301,6 +431,7 @@ class GameplayScene(Scene):
             self.background = None
 
         self.obstacles = build_obstacles(self.level.obstacle_spec, self.arena)
+        self.hazard_t = 0.0
         update_obstacles(self.obstacles, 0.0, 0.0)      # settle moving parts
         self.avoid = obstacle_avoid_list(self.obstacles)
         self.avoid_soft = [(x, y, min(SOFT_AVOID_MAX, r * SOFT_AVOID_SCALE))
@@ -311,8 +442,11 @@ class GameplayScene(Scene):
         self.snake = Snake(float(self.arena.centerx), float(self.arena.centery),
                            heading=heading, length=C.SNAKE_START_LENGTH)
         # cruise_speed() is base + per-level step only; the level's pace
-        # multiplier rides on snake.update's speed_mult (see _update).
-        self.snake.speed = self.level.cruise_speed()
+        # multiplier rides on snake.update's speed_mult (see _update).  The
+        # difficulty's own scale belongs to the snake itself, so the constant
+        # turn *radius* the entity derives from its speed is the one the
+        # player will actually be steering with.
+        self.snake.speed = self.level.cruise_speed() * float(self.diff.speed_mult)
         self.snake.set_target(*game.mouse_pos)
 
         self.food = FoodField(self.arena, self.theme)
@@ -324,13 +458,14 @@ class GameplayScene(Scene):
 
         self.runes = PowerUpField(self.arena, self.theme)
         self.runes.enabled = bool(self.level.powerups_enabled)
+        self._apply_powerup_rate()
 
         self.effects = ActiveEffects()
 
         # -- run state -----------------------------------------------------
         self.score = 0
         self.food_eaten = 0
-        self.lives = int(C.START_LIVES)
+        self.lives = diffmod.lives_for(self.diff)
         self.deaths = 0
         self.combo = 0
         self.max_combo = 0
@@ -344,6 +479,11 @@ class GameplayScene(Scene):
         self.popups = []
         self._was_boosting = False
         self._key_boost = False
+
+        self._was_crossing = False
+        self._cross_cool = 0.0
+        self._cross_taught = False
+        self._cross_count = 0
 
         self.pause_button = self._make_pause_button()
 
@@ -423,6 +563,10 @@ class GameplayScene(Scene):
             scale = 1.0
         sdt = clamp(dt * clamp(scale, 0.05, 1.0), 0.0, C.MAX_DT)
         self.clock_t += sdt
+        # Hazards animate from an absolute time value, so their pace lives in
+        # their own clock rather than in the dt they are handed.
+        hdt = sdt * self.hazard_mult
+        self.hazard_t += hdt
 
         if self.background is not None:
             self.background.update(sdt)
@@ -439,7 +583,7 @@ class GameplayScene(Scene):
         if self.ready_timer > 0.0:
             self.ready_timer -= dt
             snake.set_target(*game.mouse_pos)
-            update_obstacles(self.obstacles, sdt, self.clock_t)
+            update_obstacles(self.obstacles, hdt, self.hazard_t)
             self.food.update(sdt, self.clock_t)
             self.runes.update(sdt, self.clock_t)
             if self.ready_timer <= 0.0:
@@ -467,15 +611,16 @@ class GameplayScene(Scene):
             pass
 
         # `snake.speed` carries the level's *cruise* speed (base + per-level
-        # step).  The level's pace multiplier is a separate factor that is NOT
-        # folded into cruise_speed(), so it rides on speed_mult next to the
-        # power-up multipliers - exactly what LevelDef.base_speed() reports and
-        # what Snake._update_boost documents speed_mult to be for.  Dropping it
-        # here would leave level.speed_mult (1.00 -> 1.70) as dead data and
-        # flatten the whole campaign's pace curve.
+        # step) times the difficulty's speed scale.  The level's pace
+        # multiplier is a separate factor that is NOT folded into
+        # cruise_speed(), so it rides on speed_mult next to the power-up
+        # multipliers - exactly what LevelDef.base_speed() reports and what
+        # Snake._update_boost documents speed_mult to be for.  Dropping it here
+        # would leave level.speed_mult (1.00 -> 1.70) as dead data and flatten
+        # the whole campaign's pace curve.
         snake.update(sdt, boost=boost,
                      speed_mult=self.level.speed_mult * self.effects.speed_multiplier(),
-                     turn_mult=self.effects.turn_multiplier())
+                     turn_mult=self.effects.turn_multiplier() * self.diff.turn_mult)
 
         if snake.boosting and not self._was_boosting:
             try:
@@ -486,7 +631,7 @@ class GameplayScene(Scene):
 
         # ---- world ---------------------------------------------------------
         self.effects.update(sdt)
-        update_obstacles(self.obstacles, sdt, self.clock_t)
+        update_obstacles(self.obstacles, hdt, self.hazard_t)
         self.food.update(sdt, self.clock_t)
         self.runes.update(sdt, self.clock_t)
         self._spawn_rune(sdt)
@@ -505,8 +650,12 @@ class GameplayScene(Scene):
         if not self.finished:
             self._collide(hx, hy)
 
+        # Cross-over feedback runs after the collision pass, so it reads the
+        # sweep that pass already paid for (see Snake.crossing_self).
+        self._cross_feedback(dt, snake)
+
         # Combo lapses when nothing has been eaten inside the window.
-        if self.combo > 0 and (self.clock_t - self.last_pickup_t) > C.COMBO_WINDOW:
+        if self.combo > 0 and (self.clock_t - self.last_pickup_t) > self.combo_window:
             self.combo = 0
 
     # ------------------------------------------------------------------
@@ -529,6 +678,77 @@ class GameplayScene(Scene):
             game.particles.ambient(self.arena, self.theme.grid, dt, rate=AMBIENT_RATE)
         except Exception:
             pass
+
+    def _forgives_everything(self) -> bool:
+        """True when nothing about touching your own body can cost a life."""
+        return (not self.self_enabled) or self.effects.has("ghost")
+
+    def _cross_feedback(self, dt: float, snake: Snake) -> None:
+        """
+        Sell the cross-over: the head is *allowed* to pass over its own body.
+
+        The tight turn radius means a hairpin routinely puts the head on its
+        own neck, and ``Snake.hits_self`` forgives it.  Without feedback that
+        reads as "I should have died there and the game let me off", which is
+        exactly the wrong lesson.  So an overlap gets a whoosh on the leading
+        edge, a wash of sparks under the head for as long as it lasts, and -
+        once per level - a slow-motion tick and a label, teaching the mechanic
+        without nagging about it afterwards.
+        """
+        game = self.game
+        try:
+            crossing = bool(snake.alive) and bool(snake.crossing_self())
+            if not crossing and snake.alive and self._forgives_everything():
+                # ``crossing_self`` reports an overlap the *default* rules
+                # forgave, so it goes quiet exactly where the cue matters most:
+                # on EASY (and under ghost) the head sinks straight through its
+                # own coil, which those rules would have called a real hit.  Ask
+                # for that verdict directly and treat it as the cross-over.  The
+                # collision pass has already run this frame, so re-querying
+                # cannot change what the run does - only what it looks like.
+                crossing = bool(snake.hits_self(skip=C.SELF_COLLISION_SKIP,
+                                                depth=C.SELF_COLLISION_DEPTH,
+                                                enabled=True))
+        except Exception:       # pragma: no cover - the query is total
+            crossing = False
+
+        self._cross_cool = max(0.0, self._cross_cool - dt)
+        if not crossing:
+            self._was_crossing = False
+            return
+
+        col = P.lerp_color(self.theme.accent2, P.UI_WHITE, 0.42)
+        try:
+            # A wash *under* the head: emitted at the head itself (not behind
+            # it, like the wake) so it reads as the body sliding underneath.
+            game.particles.trail(snake.x, snake.y, col, dt,
+                                 rate=CROSS_WASH_RATE, spread=TAU * 0.5,
+                                 speed=(14.0, 78.0), life=(0.16, 0.40),
+                                 radius=(2.0, 4.5))
+        except Exception:
+            pass
+
+        if not self._was_crossing and self._cross_cool <= 0.0:
+            self._cross_cool = CROSS_SOUND_COOLDOWN
+            self._cross_count += 1
+            try:
+                # No dedicated "whoosh" cue exists; the boost swoosh at a low
+                # volume is the right shape and stays out of the way.
+                game.audio.play("boost", 0.24)
+                game.particles.ring(snake.x, snake.y, col, radius=38.0,
+                                    count=12, life=0.30, speed=95.0)
+            except Exception:
+                pass
+            if not self._cross_taught:
+                self._cross_taught = True
+                try:
+                    game.fx.slowmo(*CROSS_TEACH_SLOWMO)
+                    game.fx.flash(col, 0.16)
+                except Exception:
+                    pass
+                self._popup(snake.x, snake.y - 30.0, "CROSS-OVER", col)
+
+        self._was_crossing = True
 
     def _popup(self, x: float, y: float, text: str,
                color: Tuple[int, int, int], big: bool = False) -> None:
@@ -575,7 +795,7 @@ class GameplayScene(Scene):
             return
 
         # ---- combo ---------------------------------------------------------
-        if self.combo > 0 and (self.clock_t - self.last_pickup_t) <= C.COMBO_WINDOW:
+        if self.combo > 0 and (self.clock_t - self.last_pickup_t) <= self.combo_window:
             self.combo = min(int(C.COMBO_MAX), self.combo + 1)
         else:
             self.combo = 1
@@ -583,9 +803,15 @@ class GameplayScene(Scene):
         self.max_combo = max(self.max_combo, self.combo)
 
         # ---- score ---------------------------------------------------------
+        # The combo step is a bonus on the orb's *value*, so it goes into the
+        # base rather than into the multiplier; the power-up multiplier is what
+        # score_for_food's `multiplier` is for.  On NORMAL (food_value_mult and
+        # score_mult both 1.0) this is arithmetically identical to the v1 line
+        # it replaces.
         value = int(getattr(orb, "value", C.SCORE_PER_FOOD))
         mult = int(self.effects.score_multiplier())
-        gain = value * mult + C.COMBO_STEP_BONUS * max(0, self.combo - 1) * mult
+        base = value + C.COMBO_STEP_BONUS * max(0, self.combo - 1)
+        gain = diffmod.score_for_food(self.diff, base, multiplier=mult)
         self.score += int(gain)
 
         self.food_eaten += 1
@@ -657,7 +883,12 @@ class GameplayScene(Scene):
             return
 
         # ---- self ------------------------------------------------------------
-        if not self.effects.has("ghost") and snake.hits_self():
+        # hits_self is called unconditionally (with `enabled` doing the work
+        # the old short-circuit did) so that its sweep - and therefore
+        # crossing_self's cache - is always the one the difficulty asked for.
+        if snake.hits_self(skip=self.self_skip, depth=self.self_depth,
+                           enabled=self.self_enabled
+                                   and not self.effects.has("ghost")):
             self._hit("self")
             return
 
@@ -761,7 +992,7 @@ class GameplayScene(Scene):
         self.deaths += 1
         self.combo = 0
         snake.shrink(int(C.HIT_LENGTH_PENALTY))
-        snake.invuln = float(C.INVULN_AFTER_HIT)
+        snake.invuln = float(self.invuln_time)
         try:
             game.save.add_death(1)
         except Exception:
@@ -824,10 +1055,16 @@ class GameplayScene(Scene):
     # End of run
     # ------------------------------------------------------------------
     def _stars(self) -> int:
-        """0..3 stars for the score just achieved (a clear is always worth 1)."""
+        """
+        0..3 stars for the score just achieved (a clear is always worth 1).
+
+        The ladder is the level's own triple rescaled by the difficulty, so a
+        three-star run costs more on EXPERT and less on EASY - and the per
+        difficulty save tables keep the two results from overwriting each other.
+        """
         try:
-            one, two, three = self.level.star_targets()
-        except Exception:
+            one, two, three = self.star_targets
+        except Exception:       # pragma: no cover - the triple is pre-built
             return 1
         if self.score >= three:
             return 3
@@ -844,13 +1081,24 @@ class GameplayScene(Scene):
 
         stars = self._stars() if won else 0
         new_best = False
+        final = idx >= LEVEL_COUNT - 1
+        next_index = idx if final else idx + 1
 
         try:
             if won:
                 # record() also lifts the global high score and opens the next
-                # level; unlock_through is called explicitly for clarity.
-                new_best = bool(game.save.record(idx, int(self.score), stars))
+                # level; unlock_through is called explicitly for clarity.  The
+                # difficulty is passed so a three-star easy clear cannot
+                # overwrite a two-star expert one.
+                new_best = bool(game.save.record(idx, int(self.score), stars,
+                                                 difficulty=self.diff.key))
                 game.save.unlock_through(idx + 1)
+                if self.story_mode:
+                    # Story progress only ever moves forward; the scene that
+                    # owns the narrative hand-off (VictoryScene) reads it back.
+                    game.save.set_story_progress(next_index)
+                    if final:
+                        game.save.set_story_complete(True)
             else:
                 # A loss must not unlock anything, so record() is off limits -
                 # only the global high score is worth keeping.
@@ -861,7 +1109,10 @@ class GameplayScene(Scene):
         except Exception:
             pass
 
-        game.last_result = {
+        # Everything the result screens need, including the story hand-off they
+        # own: the keys below are additive, so a scene that only knows the v1
+        # set keeps working untouched.
+        result: Dict[str, Any] = {
             "score": int(self.score),
             "level_index": idx,
             "level_name": str(self.level.name),
@@ -873,7 +1124,31 @@ class GameplayScene(Scene):
             "elapsed": float(self.elapsed),
             "max_combo": int(self.max_combo),
             "deaths": int(self.deaths),
+            # -- v2: difficulty ---------------------------------------------
+            "difficulty": str(self.diff.key),
+            "difficulty_name": str(self.diff.name),
+            "difficulty_label": str(self.diff.hud_label),
+            "difficulty_color": tuple(self.diff.color),
+            "star_targets": tuple(self.star_targets),
+            "crossings": int(self._cross_count),
+            # -- v2: mode ----------------------------------------------------
+            "mode": str(getattr(game, "mode", C.MODE_FREE)),
+            "story": bool(self.story_mode),
+            "next_index": int(next_index),
+            "final_level": bool(final),
         }
+        if self.story_mode:
+            beat, chapter = self.beat, self.chapter
+            if beat is not None:
+                result["beat_title"] = str(beat.title)
+                result["beat_speaker"] = str(beat.speaker)
+                result["chapter_end"] = bool(beat.is_chapter_end)
+            if chapter is not None:
+                result["chapter"] = int(chapter.number)
+                result["chapter_title"] = str(chapter.title)
+                result["chapter_roman"] = str(chapter.roman)
+            result["story_complete"] = bool(won and final)
+        game.last_result = result
 
         try:
             if won:
@@ -905,7 +1180,9 @@ class GameplayScene(Scene):
         if self.background is not None:
             self.background.draw(surface)
         draw_arena(surface, self.arena, theme, t)
-        draw_obstacles(surface, self.obstacles, theme, t)
+        # Hazards are drawn from the same clock they are simulated on, so a
+        # difficulty that speeds them up speeds up their animation with them.
+        draw_obstacles(surface, self.obstacles, theme, self.hazard_t)
         if self.food is not None:
             self.food.draw(surface, t)
         if self.runes is not None:
@@ -971,6 +1248,15 @@ class GameplayScene(Scene):
             "boost": float(snake.boost) if snake is not None else 0.0,
             "boost_max": float(C.SNAKE_BOOST_MAX),
             "effects": list(self.effects.items()),
+            # v2 additions.  draw_hud ignores keys it does not know, so this is
+            # safe against either version of the HUD.
+            "difficulty": str(self.diff.key),
+            "difficulty_label": str(self.diff.hud_label),
+            "difficulty_color": tuple(self.diff.color),
+            "mode": str(getattr(self.game, "mode", C.MODE_FREE)),
+            "chapter": int(self.chapter.number) if self.chapter is not None else 0,
+            "chapter_title": str(self.chapter.title) if self.chapter is not None else "",
+            "beat_title": str(self.beat.title) if self.beat is not None else "",
         }
 
     def _draw_pause_button(self, surface: pygame.Surface) -> None:
@@ -1025,6 +1311,28 @@ class GameplayScene(Scene):
     # ------------------------------------------------------------------
     # READY overlay
     # ------------------------------------------------------------------
+    @staticmethod
+    def _fit_font(text: str, fonts: Any, width: int) -> Any:
+        """
+        Largest of the display faces that fits `text` into `width` pixels.
+
+        Level names all fit the title face comfortably; story beat titles do
+        not ("The Machine Wants Feeding" is half again as wide as the card), so
+        the headline steps down a size or two rather than spilling out of the
+        panel.  Never raises - a font book that cannot measure just gets the
+        title face back.
+        """
+        try:
+            for name in ("title", "h1", "h2"):
+                font = getattr(fonts, name, None)
+                if font is None:
+                    continue
+                if font.size(str(text))[0] <= max(40, int(width)):
+                    return font
+            return getattr(fonts, "h2", None) or fonts.title
+        except Exception:
+            return getattr(fonts, "title", None)
+
     def _draw_ready(self, surface: pygame.Surface) -> None:
         game = self.game
         fonts = game.fonts
@@ -1050,11 +1358,31 @@ class GameplayScene(Scene):
                    glow=0.55 * vis)
 
         cx = panel.centerx
+        beat, chapter = self.beat, self.chapter
+        story = self.story_mode and beat is not None
+
+        # Header row: the chapter on the left (story runs only), the level
+        # number in the middle, the difficulty on the right - so the player can
+        # always see what they picked without leaving the level.
         draw_text(surface, "LEVEL {:02d}".format(self.level.number), fonts.small,
                   tint(theme.accent2), (cx, panel.y + 20), align="center")
-        draw_text(surface, self.level.name.upper(), fonts.title,
+        if story and chapter is not None:
+            draw_text(surface, "{}. {}".format(chapter.roman, chapter.title.upper()),
+                      fonts.tiny, tint(theme.accent2),
+                      (panel.x + 26, panel.y + 24))
+        draw_text(surface, self.diff.hud_label, fonts.tiny,
+                  tint(self.diff.color), (panel.right - 26, panel.y + 24),
+                  align="right")
+
+        # In a story run the beat's title is the headline and the level's own
+        # name becomes the strapline; in free play the level is the headline.
+        title = beat.title.upper() if story else self.level.name.upper()
+        strap = ("{}  -  {}".format(self.level.name, self.level.subtitle)
+                 if story else self.level.subtitle)
+        draw_text(surface, title,
+                  self._fit_font(title, fonts, panel.w - 56),
                   tint(theme.text), (cx, panel.y + 46), align="center")
-        draw_text(surface, self.level.subtitle, fonts.body,
+        draw_text(surface, strap, fonts.body,
                   tint(theme.accent), (cx, panel.y + 122), align="center")
         draw_text(surface, self.level.hint, fonts.small,
                   tint(theme.text_dim), (cx, panel.y + 160), align="center")

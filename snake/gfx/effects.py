@@ -113,8 +113,14 @@ ABERRATION_MASK_MAX = 118   # ... and at the strongest
 ABERRATION_RINGS = 5        # nested bands used to fake the radial ramp
 
 VIGNETTE_TINT: RGB = (2, 3, 9)
-VIGNETTE_STRENGTH = 0.80    # peak alpha at the very corners, 0..1
-VIGNETTE_INNER = 0.44       # normalised radius where the darkening starts
+# The vignette, the curvature rolloff and the corner cut all multiply, so
+# their peaks compound: at 0.80 and 0.62 the corners passed only ~7% of the
+# light, which swallowed the outer ~100 px ring of every screen - the settings
+# title, the level-select star readout and several captions became unreadable.
+# Tuned so the rim still reads as a CRT bezel while the corners keep >40%
+# transmission.  tools/playtest.py enforces that floor (BEZEL_FLOOR).
+VIGNETTE_STRENGTH = 0.42    # peak alpha at the very corners, 0..1
+VIGNETTE_INNER = 0.55       # normalised radius where the darkening starts
 VIGNETTE_LOD = (160, 90)    # the vignette is computed small and upscaled
 
 SCANLINE_GAP = 3            # one dark line every N rows
@@ -125,9 +131,9 @@ SCANLINE_ALPHA = 15         # very subtle - it should read as texture, not strip
 # (the part of the tube that turns away from you), a hard rounded corner cut,
 # and a thin glass rim highlight.
 CURVATURE_LOD = (128, 72)
-CURVATURE_STRENGTH = 0.62   # peak alpha of the edge rolloff
-CURVATURE_INNER = 0.70      # squircle radius where the rolloff starts
-CURVATURE_CORNER = 0.055    # corner cut radius as a fraction of min(w, h)
+CURVATURE_STRENGTH = 0.28   # peak alpha of the edge rolloff
+CURVATURE_INNER = 0.80      # squircle radius where the rolloff starts
+CURVATURE_CORNER = 0.030    # corner cut radius as a fraction of min(w, h)
 CURVATURE_RIM: RGB = (150, 176, 214)
 CURVATURE_RIM_ALPHA = 30
 

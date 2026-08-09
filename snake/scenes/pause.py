@@ -29,10 +29,11 @@ __all__ = ["PauseScene"]
 
 # Panel geometry -----------------------------------------------------------
 _PANEL_W = 470
-# 168 px of title block + five 54 px buttons on an 11 px pitch (314 px) + the
+# 168 px of title block + six 54 px buttons on an 11 px pitch (379 px) + the
 # three-line control reminder (76 px) + padding.  At the old 528 the reminder
-# was printed straight through the QUIT TO MENU button.
-_PANEL_H = 580
+# was printed straight through the QUIT TO MENU button; v2 added a sixth
+# button (SETTINGS) which is why this grew again.
+_PANEL_H = 646
 _BTN_W = C.UI_BUTTON_W
 _BTN_H = 54
 _BTN_GAP = 11
@@ -147,6 +148,7 @@ class PauseScene(Scene):
             ("resume", "RESUME", "primary"),
             ("restart", "RESTART LEVEL", "ghost"),
             ("sound", self._sound_label(), "ghost"),
+            ("settings", "SETTINGS", "ghost"),
             ("levels", "LEVEL SELECT", "ghost"),
             ("menu", "QUIT TO MENU", "danger"),
         ]
@@ -193,6 +195,8 @@ class PauseScene(Scene):
                 self._restart()
             elif key == "sound":
                 self._toggle_sound()
+            elif key == "settings":
+                self._open_settings()
             elif key == "levels":
                 self._closing = True
                 self._click("click")
@@ -219,6 +223,29 @@ class PauseScene(Scene):
             # was already set above, so a bare switch restarts the same level.
             self.game.switch_scene(C.SCENE_GAME)
 
+    def _open_settings(self) -> None:
+        """
+        Stack the settings screen on top of the pause overlay.
+
+        Deliberately a *push*, not a switch: the run underneath must survive a
+        detour into the options, and `SettingsScene` pops itself when it is the
+        top of a stack deeper than one.  `_closing` is left alone for the same
+        reason - this overlay is not going away, so re-arming it would leave
+        every pause button dead when settings pops back.
+        """
+        self._click("click")
+        try:
+            self.game.push_scene(C.SCENE_SETTINGS, back=C.SCENE_PAUSE)
+        except TypeError:
+            # A settings scene that does not accept the kwarg still opens.
+            self.game.push_scene(C.SCENE_SETTINGS)
+
+    def _sync_sound_label(self) -> None:
+        """Re-read the mute state into the SOUND button's label."""
+        for btn in self.buttons:
+            if btn.data == "sound":
+                btn.label = self._sound_label()
+
     def _toggle_sound(self) -> None:
         """Flip mute, persist the preference and relabel the button."""
         muted = False
@@ -233,9 +260,7 @@ class PauseScene(Scene):
             pass
         if not muted:
             self._click("click")     # audible confirmation only when unmuted
-        for btn in self.buttons:
-            if btn.data == "sound":
-                btn.label = self._sound_label()
+        self._sync_sound_label()
 
     # ------------------------------------------------------------------
     # Input
@@ -254,6 +279,8 @@ class PauseScene(Scene):
                     self._activate("restart")
                 elif key == pygame.K_m:
                     self._activate("sound")
+                elif key in (pygame.K_s, pygame.K_o):
+                    self._activate("settings")
         except Exception:
             pass
 
@@ -271,6 +298,10 @@ class PauseScene(Scene):
             # little bounce.  Buttons ride the same offset, which keeps their
             # hit rects exactly where they are drawn.
             offset = int(round((1.0 - ease_out_back(self.intro)) * 46.0))
+            # The settings screen can be stacked on top of this one and flip
+            # mute while it is there, so the label is re-read rather than only
+            # written by our own toggle.
+            self._sync_sound_label()
             mouse = getattr(self.game, "mouse_pos", (0.0, 0.0))
             for btn in self.buttons:
                 base = self._base_y.get(id(btn), btn.rect.centery)

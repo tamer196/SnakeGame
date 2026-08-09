@@ -16,6 +16,30 @@ switches here.  Every key is optional: a missing or empty dict degrades to a
 zeroed summary rather than an exception, because a crash on the results screen
 would throw away the run the player just finished.
 
+v2: mode and difficulty
+-----------------------
+Both screens now show the difficulty the run was played on as a coloured badge
+and compare the score against that difficulty's *adjusted* par (the one-star
+threshold from :func:`snake.core.difficulty.apply_star_targets`), not the raw
+level par - beating par on expert is a different sentence to beating it on easy
+and the screen has to say so.
+
+:class:`VictoryScene` additionally owns the **story hand-off**, which is the
+only piece of campaign routing that does not live in ``mode_select``.  In story
+mode the primary button becomes CONTINUE and it assembles the card stack for
+:data:`~snake.config.SCENE_STORY` itself:
+
+*   the outro of the level just cleared,
+*   the chapter plate, when the next level opens a new chapter,
+*   the intro of the next level (skipped when the save says it has been read),
+
+then hands over with ``next_scene=C.SCENE_GAME`` and
+``next_kwargs={"level_index": next_index}``.  After the final level it flags the
+campaign complete, shows the epilogue and returns to the menu.
+
+:class:`GameOverScene` in story mode does not pretend the campaign continues:
+it offers RETRY LEVEL and ABANDON RUN instead of a level browser.
+
 Scene instances are cached and reused by the scene manager, so *all* mutable
 state is rebuilt in ``on_enter`` - nothing may survive from a previous run.
 """
@@ -25,12 +49,14 @@ from __future__ import annotations
 import dataclasses
 import math
 import random
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Set, Tuple
 
 import pygame
 
 from .. import config as C
 from .. import palette as P
+from ..core import difficulty as D
+from ..core import story as S
 from ..core.contracts import (
     TAU,
     Scene,
@@ -65,6 +91,10 @@ STAR_GAP = 0.55
 STAR_POP = 0.55
 
 BUTTON_H = C.UI_BUTTON_H
+
+#: Beat indices 0..11 are the twelve level beats; ``mode_select`` parks the
+#: prologue's own "seen" flag far above them, so the two never collide.
+_MAX_BEAT = max(0, LEVEL_COUNT - 1)
 
 
 # --------------------------------------------------------------------------
@@ -111,6 +141,15 @@ def _fmt_time(seconds: float) -> str:
     return "{:d}:{:02d}".format(s // 60, s % 60)
 
 
+def _fmt_delta(delta: int) -> str:
+    """A signed, thousands-separated delta: ``+1,240`` / ``-90`` / ``+0``."""
+    try:
+        n = int(delta)
+    except (TypeError, ValueError):
+        n = 0
+    return "{}{:,}".format("+" if n >= 0 else "-", abs(n))
+
+
 def _star_points(cx: float, cy: float, radius: float,
                  rot: float = 0.0) -> List[Tuple[int, int]]:
     """The ten vertices of a five-pointed star, outer point up by default."""
@@ -141,6 +180,40 @@ def _draw_star(surface: pygame.Surface, cx: float, cy: float, radius: float,
             pygame.draw.polygon(surface, color, pts, max(1, int(radius * 0.09)))
     except Exception:
         pass
+
+
+def _draw_badge(surface: pygame.Surface, cx: float, cy: float, label: str,
+                color: Sequence[int], font: Optional[pygame.font.Font], *,
+                glow: float = 0.30) -> pygame.Rect:
+    """
+    A rounded chip in `color` centred on ``(cx, cy)`` - the difficulty tag.
+
+    Built per frame rather than cached because it is one rounded rect and two
+    blits; the text underneath is already cached by `draw_text`.
+    """
+    try:
+        text = str(label).upper()
+        if font is None:
+            return pygame.Rect(0, 0, 0, 0)
+        tw, th = font.size(text)
+        w, h = int(tw) + 40, int(th) + 12
+        rect = pygame.Rect(0, 0, w, h)
+        rect.center = (int(cx), int(cy))
+
+        if glow > 0.01:
+            draw_glow_circle(surface, cx, cy, w * 0.52, color, glow)
+        chip = pygame.Surface((w, h), pygame.SRCALPHA)
+        radius = h // 2
+        pygame.draw.rect(chip, P.with_alpha(P.shade(color, 0.26), 214),
+                         (0, 0, w, h), border_radius=radius)
+        pygame.draw.rect(chip, P.with_alpha(color, 235), (0, 0, w, h), 2,
+                         border_radius=radius)
+        surface.blit(chip, rect.topleft)
+        draw_text(surface, text, font, P.lerp_color(color, P.UI_WHITE, 0.60),
+                  (rect.centerx, rect.y + 6), align="center", shadow=False)
+        return rect
+    except Exception:
+        return pygame.Rect(0, 0, 0, 0)
 
 
 # ==========================================================================
@@ -176,6 +249,15 @@ class _ResultScene(Scene):
         self.deaths: int = 0
         self.elapsed: float = 0.0
 
+        # v2: mode / difficulty / campaign position.
+        self.mode: str = C.MODE_FREE
+        self.diff: D.Difficulty = D.get_difficulty(None)
+        self.star_targets: Tuple[int, int, int] = (1, 2, 3)
+        self.par: int = 1
+        self.final: bool = False
+        self.next_index: int = 0
+        self._result_level: int = -1
+
         self.t: float = 0.0                     # seconds since on_enter
         self._bg: Any = None
         self._bg_style: str = ""
@@ -197,6 +279,7 @@ class _ResultScene(Scene):
         fallback_index = int(getattr(self.game, "level_index", 0) or 0)
         self.level_index = int(clamp(num("level_index", fallback_index),
                                      0, LEVEL_COUNT - 1))
+        self._result_level = self.level_index
         level = get_level(self.level_index)
 
         name = self.result.get("level_name")
@@ -210,6 +293,108 @@ class _ResultScene(Scene):
         self.elapsed = max(0.0, num("elapsed"))
         self.new_best = bool(self.result.get("new_best", False))
 
+        self.mode = self._read_mode()
+        self.diff = D.get_difficulty(
+            self.result.get("difficulty", getattr(self.game, "difficulty", None)))
+        self._derive()
+
+    def _read_mode(self) -> str:
+        """
+        Which mode the finished run belonged to.
+
+        The result dict is authoritative, because it was written by the run
+        itself: `GameplayScene` always stamps ``mode`` and ``story`` into it.
+        A dict that carries neither is therefore *not* a campaign result - it
+        is a legacy or hand-built one - and it resolves to free play, which is
+        the harmless reading: free play never routes anybody into narrative or
+        touches the story bookkeeping.  ``game.mode`` is consulted only when
+        there is no result dict at all, i.e. when this screen was entered
+        cold and has nothing else to go on.
+        """
+        try:
+            raw = self.result.get("mode")
+            if isinstance(raw, str):
+                key = raw.strip().lower()
+                if key in C.GAME_MODES:
+                    return key
+            flag = self.result.get("story")
+            if isinstance(flag, bool):
+                return C.MODE_STORY if flag else C.MODE_FREE
+            if self.result:
+                return C.MODE_FREE
+            live = str(getattr(self.game, "mode", C.MODE_FREE) or "").strip().lower()
+            return live if live in C.GAME_MODES else C.MODE_FREE
+        except Exception:
+            return C.MODE_FREE
+
+    def _derive(self) -> None:
+        """Recompute everything that follows from the level index."""
+        try:
+            level = get_level(self.level_index)
+            self.final = self.level_index >= LEVEL_COUNT - 1
+            self.next_index = self.level_index if self.final else self.level_index + 1
+            self.star_targets = self._read_targets(level)
+            self.par = max(1, int(self.star_targets[0]))
+        except Exception:
+            self.final = False
+            self.next_index = self.level_index
+            self.star_targets = (1, 2, 3)
+            self.par = 1
+
+    def _read_targets(self, level: Any) -> Tuple[int, int, int]:
+        """
+        The difficulty-adjusted one/two/three-star thresholds.
+
+        `GameplayScene` already computed these for the run, so they are used
+        verbatim when they belong to the level on screen; otherwise they are
+        rebuilt from the level table through :func:`difficulty.apply_star_targets`
+        so a hand-built result dict still gets an honest par.
+        """
+        if self._result_level == self.level_index:
+            raw = self.result.get("star_targets")
+            try:
+                vals = [int(v) for v in list(raw)[:3]]  # type: ignore[arg-type]
+                if len(vals) == 3 and vals[0] > 0 and vals[0] <= vals[1] <= vals[2]:
+                    return (vals[0], vals[1], vals[2])
+            except Exception:
+                pass
+        try:
+            return D.apply_star_targets(self.diff, level.star_targets())
+        except Exception:
+            return (1, 2, 3)
+
+    # -- mode / story helpers ----------------------------------------------
+    @property
+    def is_story(self) -> bool:
+        """True when the finished run was part of the campaign."""
+        return self.mode == C.MODE_STORY
+
+    def _beat_seen(self, index: int) -> bool:
+        """Has this level's narrative already been read?  False on any doubt."""
+        try:
+            return bool(self.game.save.beat_seen(int(index)))
+        except Exception:
+            return False
+
+    def _mark_beat(self, index: int) -> None:
+        """Remember that a level's narrative has been shown.  Never raises."""
+        try:
+            idx = int(index)
+        except (TypeError, ValueError):
+            return
+        if 0 <= idx <= _MAX_BEAT:
+            try:
+                self.game.save.mark_beat_seen(idx)
+            except Exception:
+                pass
+
+    def _flush_save(self) -> None:
+        """Persist the profile, tolerating a read-only or missing save file."""
+        try:
+            self.game.save.flush()
+        except Exception:
+            pass
+
     # -- lifecycle ---------------------------------------------------------
     def on_enter(self, **kwargs: Any) -> None:
         try:
@@ -219,6 +404,7 @@ class _ResultScene(Scene):
                 try:
                     self.level_index = int(clamp(float(kwargs["level_index"]),
                                                  0, LEVEL_COUNT - 1))
+                    self._derive()
                 except (TypeError, ValueError):
                     pass
             self.game.level_index = self.level_index
@@ -261,6 +447,18 @@ class _ResultScene(Scene):
 
     def _emit(self, dt: float) -> None:
         """Per-frame particle emission."""
+
+    # -- button rows -------------------------------------------------------
+    def _row(self, specs: Sequence[Tuple[str, str, str]], y: float,
+             width: int, gap: int = 24) -> List[Button]:
+        """Lay a horizontal row of buttons out, centred on the canvas."""
+        if not specs:
+            return []
+        total = width * len(specs) + gap * (len(specs) - 1)
+        x = (C.WINDOW_W - total) * 0.5
+        return [Button((x + i * (width + gap), y, width, BUTTON_H),
+                       label, style=style, data=action)
+                for i, (label, style, action) in enumerate(specs)]
 
     # -- background --------------------------------------------------------
     def _ensure_background(self) -> None:
@@ -321,15 +519,29 @@ class _ResultScene(Scene):
                 self.game.level_index = self.level_index
                 self._go(C.SCENE_GAME, level_index=self.level_index)
             elif key == "next":
-                nxt = int(clamp(self.level_index + 1, 0, LEVEL_COUNT - 1))
+                nxt = int(clamp(self.next_index, 0, LEVEL_COUNT - 1))
                 self.game.level_index = nxt
                 self._go(C.SCENE_GAME, level_index=nxt)
+            elif key == "story":
+                self._story_continue()
             elif key == "levels":
                 self._go(C.SCENE_LEVELS)
             elif key == "menu":
                 self._go(C.SCENE_MENU)
         except Exception:
             pass
+
+    def _story_continue(self) -> None:
+        """Overridden by :class:`VictoryScene`; a no-op everywhere else."""
+        self._go(C.SCENE_MENU)
+
+    def _actions(self) -> Set[str]:
+        """Every action currently reachable by mouse - keys mirror these only."""
+        out: Set[str] = set()
+        for button in self.buttons:
+            if button.enabled and isinstance(button.data, str):
+                out.add(button.data)
+        return out
 
     # -- per-frame ---------------------------------------------------------
     def handle_event(self, event: "pygame.event.Event") -> None:
@@ -347,15 +559,19 @@ class _ResultScene(Scene):
     def _handle_key(self, event: "pygame.event.Event") -> None:
         """Keyboard shortcuts - always a mirror of an on-screen button."""
         key = getattr(event, "key", None)
+        available = self._actions()
+
+        def fire(action: str) -> None:
+            if action in available:
+                self.game.audio.play("click")
+                self._act(action)
+
         if key in (pygame.K_ESCAPE,):
-            self.game.audio.play("click")
-            self._act("menu")
+            fire("menu")
         elif key in (pygame.K_l,):
-            self.game.audio.play("click")
-            self._act("levels")
+            fire("levels")
         elif key in (pygame.K_r,):
-            self.game.audio.play("click")
-            self._act("retry")
+            fire("retry")
         elif key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
             # Enter takes the first enabled button, which is the primary action.
             for button in self.buttons:
@@ -418,6 +634,70 @@ class _ResultScene(Scene):
                   value_color if value_color is not None else self.theme.text,
                   (x_value, y - 3), align="right")
 
+    def _diff_color(self) -> RGB:
+        """The badge colour: the run's own, falling back to the table's."""
+        raw = self.result.get("difficulty_color")
+        try:
+            if raw is not None:
+                return (int(raw[0]) & 0xFF, int(raw[1]) & 0xFF, int(raw[2]) & 0xFF)
+        except Exception:
+            pass
+        try:
+            c = self.diff.color
+            return (int(c[0]), int(c[1]), int(c[2]))
+        except Exception:
+            return P.UI_WHITE
+
+    def _diff_label(self) -> str:
+        """The badge text, e.g. ``EXPERT``."""
+        raw = self.result.get("difficulty_label") or self.result.get("difficulty_name")
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip().upper()
+        try:
+            return str(self.diff.hud_label).upper()
+        except Exception:
+            return "NORMAL"
+
+    def _draw_difficulty_badge(self, surface: pygame.Surface, cx: float, cy: float,
+                               *, muted: bool = False) -> None:
+        """The coloured difficulty chip both screens carry under the title."""
+        color = self._diff_color()
+        if muted:
+            color = _mute(color, 0.30, 0.90)
+        try:
+            font = self.game.fonts.small
+        except Exception:
+            font = None
+        _draw_badge(surface, cx, cy, self._diff_label(), color, font,
+                    glow=0.16 if muted else 0.34)
+
+    def _draw_par_line(self, surface: pygame.Surface, cx: float, y: float) -> None:
+        """``PAR 140  (+320)`` - the score measured against the adjusted par."""
+        try:
+            delta = int(self.score) - int(self.par)
+            good = delta >= 0
+            col = P.UI_GOOD if good else P.lerp_color(self.theme.text_dim,
+                                                      P.UI_WARN, 0.45)
+            label = "{} PAR {:,}   ({})".format(
+                self._diff_label(), int(self.par), _fmt_delta(delta))
+            draw_text(surface, label, self.game.fonts.small, col, (cx, y),
+                      align="center")
+        except Exception:
+            pass
+
+    def _chapter_line(self) -> str:
+        """``CHAPTER II  -  LEVEL 05`` in story mode, ``LEVEL 05`` otherwise."""
+        base = "LEVEL {:02d}".format(self.level_index + 1)
+        if not self.is_story:
+            return base
+        try:
+            roman = str(self.result.get("chapter_roman") or "").strip()
+            if not roman:
+                roman = str(S.get_chapter(self.level_index).roman)
+            return "CHAPTER {}   -   {}".format(roman, base)
+        except Exception:
+            return base
+
 
 # ==========================================================================
 # GAME OVER
@@ -436,18 +716,21 @@ class GameOverScene(_ResultScene):
         return _mute_theme(get_level(self.level_index).theme)
 
     def _build_buttons(self) -> List[Button]:
-        labels = (("RETRY", "primary", "retry"),
-                  ("LEVEL SELECT", "ghost", "levels"),
-                  ("MENU", "ghost", "menu"))
-        width, gap = 268, 26
-        total = width * len(labels) + gap * (len(labels) - 1)
-        x = (C.WINDOW_W - total) * 0.5
-        y = 604
-        out: List[Button] = []
-        for i, (label, style, action) in enumerate(labels):
-            out.append(Button((x + i * (width + gap), y, width, BUTTON_H),
-                              label, style=style, data=action))
-        return out
+        """
+        Story mode gets two honest choices, free play keeps the browser.
+
+        A campaign death is not a menu of levels - offering LEVEL SELECT there
+        would quietly drop the player out of the run they are in the middle of,
+        so the only ways on are "again" and "give up".
+        """
+        if self.is_story:
+            return self._row((("RETRY LEVEL", "primary", "retry"),
+                              ("ABANDON RUN", "ghost", "menu")),
+                             604, width=300, gap=36)
+        return self._row((("RETRY", "primary", "retry"),
+                          ("LEVEL SELECT", "ghost", "levels"),
+                          ("MENU", "ghost", "menu")),
+                         604, width=268, gap=26)
 
     def _on_ready(self) -> None:
         self._ember_acc = 0.0
@@ -497,12 +780,12 @@ class GameOverScene(_ResultScene):
         t = self.game.time
         cx = C.WINDOW_W * 0.5
 
-        draw_panel(surface, (300, 92, 680, 468), theme, alpha=196, glow=0.20)
+        draw_panel(surface, (300, 88, 680, 480), theme, alpha=196, glow=0.20)
 
         # ---- heading -----------------------------------------------------
         # Two stacked glows (wide + tight) give the words real weight without
         # the cost of a blurred text surface.
-        head_y = 118.0
+        head_y = 106.0
         breathe = 0.35 + 0.20 * pulse(t, 1.4)
         draw_glow_circle(surface, cx, head_y + 46, 250.0,
                          P.shade(theme.hazard, 0.85), breathe)
@@ -511,15 +794,19 @@ class GameOverScene(_ResultScene):
                   P.lerp_color(P.UI_WHITE, theme.hazard, 0.35), (cx, head_y),
                   align="center")
 
+        draw_text(surface, self._chapter_line(), fonts.tiny,
+                  P.shade(theme.accent2, 1.0), (cx, head_y + 100), align="center")
         draw_text(surface, self.level_name.upper(), fonts.body,
                   theme.text_dim, (cx, head_y + 118), align="center")
-        draw_text(surface, "LEVEL {:02d}".format(self.level_index + 1), fonts.tiny,
-                  P.shade(theme.accent2, 1.0), (cx, head_y + 100), align="center")
+
+        # The difficulty stays legible but joins the drained palette - this
+        # screen is desaturated on purpose and a hot chip would fight it.
+        self._draw_difficulty_badge(surface, cx, 272.0, muted=True)
 
         # ---- summary -----------------------------------------------------
         x_label, x_value = 372.0, 908.0
-        y = 300.0
-        pitch = 46.0
+        y = 294.0
+        pitch = 44.0
         score_col = P.lerp_color(P.UI_WHITE, P.UI_GOLD, 0.45)
         self._draw_stat_row(surface, x_label, x_value, y, "Score",
                             "{:,}".format(self.counted(self.score)),
@@ -537,19 +824,23 @@ class GameOverScene(_ResultScene):
                             dim=theme.text_dim)
 
         # A hairline under the block ties the rows to the buttons below.
+        rule_y = y + pitch * 4 + 6
         pygame.draw.line(surface, P.with_alpha(theme.grid, 200),
-                         (372, y + pitch * 4 + 6), (908, y + pitch * 4 + 6))
+                         (372, rule_y), (908, rule_y))
+
+        self._draw_par_line(surface, cx, rule_y + 12.0)
 
         if self.new_best:
-            self._draw_new_best(surface, cx, y + pitch * 4 + 40.0)
+            self._draw_new_best(surface, cx, rule_y + 44.0)
         else:
             best = 0
             try:
-                best = int(self.game.save.best_for(self.level_index))
+                best = int(self.game.save.best_for(self.level_index,
+                                                   self.diff.key))
             except Exception:
                 best = 0
             draw_text(surface, "LEVEL BEST  {:,}".format(max(best, self.score)),
-                      fonts.small, theme.text_dim, (cx, y + pitch * 4 + 44.0),
+                      fonts.small, theme.text_dim, (cx, rule_y + 46.0),
                       align="center")
 
     def _draw_new_best(self, surface: pygame.Surface, cx: float, cy: float) -> None:
@@ -574,53 +865,60 @@ class GameOverScene(_ResultScene):
 # VICTORY
 # ==========================================================================
 class VictoryScene(_ResultScene):
-    """The run ended well: confetti, a star ceremony and a rolling score."""
+    """
+    The run ended well: confetti, a star ceremony and a rolling score.
+
+    In story mode this scene is also the campaign's switchboard: CONTINUE
+    builds the narrative card stack for the transition and hands it to
+    :data:`~snake.config.SCENE_STORY` along with the level that follows it.
+    """
 
     veil_alpha = 112
 
     def __init__(self, game: "Game") -> None:
         super().__init__(game)
-        self.final: bool = False            # cleared the last level?
         self._stars_shown: int = 0          # how many have popped so far
         self._confetti: float = 0.0         # seconds of shower left
         self._confetti_acc: float = 0.0
         self._star_x: List[float] = []
-        self._star_y: float = 300.0
+        self._star_y: float = 292.0
 
     # -- setup -------------------------------------------------------------
     def _build_buttons(self) -> List[Button]:
+        """
+        Story mode leads with CONTINUE; free play keeps the browser row.
+
+        REPLAY and MENU survive in both because every action on this screen has
+        to be reachable with the mouse alone, and a campaign player still needs
+        a way to grind a level for stars or stop for the night.
+        """
+        if self.is_story:
+            if self.final:
+                return self._row((("CONTINUE", "primary", "story"),
+                                  ("MENU", "ghost", "menu")),
+                                 618, width=300, gap=36)
+            return self._row((("CONTINUE", "primary", "story"),
+                              ("REPLAY", "ghost", "retry"),
+                              ("MENU", "ghost", "menu")),
+                             618, width=268, gap=26)
+
         specs: List[Tuple[str, str, str]] = []
         if not self.final:
             specs.append(("NEXT LEVEL", "primary", "next"))
         specs.append(("REPLAY", "ghost" if not self.final else "primary", "retry"))
         specs.append(("LEVEL SELECT", "ghost", "levels"))
         specs.append(("MENU", "ghost", "menu"))
+        return self._row(specs, 618, width=248 if len(specs) == 4 else 268, gap=22)
 
-        width = 248 if len(specs) == 4 else 268
-        gap = 22
-        total = width * len(specs) + gap * (len(specs) - 1)
-        x = (C.WINDOW_W - total) * 0.5
-        y = 618
-        return [Button((x + i * (width + gap), y, width, BUTTON_H),
-                       label, style=style, data=action)
-                for i, (label, style, action) in enumerate(specs)]
-
-    def on_enter(self, **kwargs: Any) -> None:
-        # `final` decides the button row, so it has to be known before the base
-        # class builds it - resolve the level index here first.
-        try:
-            self._read_result()
-            self.final = self.level_index >= LEVEL_COUNT - 1
-        except Exception:
-            self.final = False
-        super().on_enter(**kwargs)
-        self.final = self.level_index >= LEVEL_COUNT - 1
+    # `final` and `mode` decide the button row, and both are resolved by
+    # `_read_result` / `_derive` before the base class calls `_build_buttons`,
+    # so this scene needs no `on_enter` of its own.
 
     def _on_ready(self) -> None:
         self._stars_shown = 0
         self._confetti = 2.6
         self._confetti_acc = 0.0
-        self._star_y = 300.0
+        self._star_y = 292.0
         centre = C.WINDOW_W * 0.5
         self._star_x = [centre - 118.0, centre, centre + 118.0]
         try:
@@ -629,6 +927,77 @@ class VictoryScene(_ResultScene):
             self._firework(centre, 250.0, 1.15)
         except Exception:
             pass
+
+    # -- story hand-off ----------------------------------------------------
+    def _story_cards(self) -> List[Any]:
+        """
+        The cards CONTINUE shows before the next level starts.
+
+        Outro of the level just cleared, the chapter plate when the next level
+        opens a chapter, then the next level's intro - unless the save says it
+        has already been read, so a replay of an old chapter does not re-tell a
+        story the player has seen.  Every step is independently guarded: a card
+        that cannot be built simply drops out of the stack.
+        """
+        cards: List[Any] = []
+        try:
+            beat = S.get_beat(self.level_index)
+            cards.append(S.StoryCard(title=beat.title, lines=tuple(beat.outro),
+                                     speaker=beat.speaker))
+        except Exception:
+            pass
+        self._mark_beat(self.level_index)
+
+        if self.final:
+            try:
+                cards.append(S.EPILOGUE)
+            except Exception:
+                pass
+            return cards
+
+        nxt = self.next_index
+        try:
+            if S.chapter_start(nxt):
+                cards.append(S.get_chapter(nxt))
+        except Exception:
+            pass
+        if not self._beat_seen(nxt):
+            try:
+                beat = S.get_beat(nxt)
+                cards.append(S.StoryCard(title=beat.title, lines=tuple(beat.intro),
+                                         speaker=beat.speaker))
+            except Exception:
+                pass
+        self._mark_beat(nxt)
+        return cards
+
+    def _story_continue(self) -> None:
+        """CONTINUE: narrate the transition, then hand over to the next level."""
+        cards = self._story_cards()
+
+        if self.final:
+            try:
+                self.game.save.set_story_complete(True)
+            except Exception:
+                pass
+            self._flush_save()
+            self._go(C.SCENE_STORY, cards=cards, next_scene=C.SCENE_MENU,
+                     next_kwargs={}, theme=self.theme)
+            return
+
+        nxt = int(clamp(self.next_index, 0, LEVEL_COUNT - 1))
+        try:
+            self.game.save.set_story_progress(nxt)
+        except Exception:
+            pass
+        self._flush_save()
+        try:
+            self.game.level_index = nxt
+        except Exception:
+            pass
+        self._go(C.SCENE_STORY, cards=cards, next_scene=C.SCENE_GAME,
+                 next_kwargs={"level_index": nxt},
+                 theme=P.theme_for_level(nxt))
 
     # -- particles ---------------------------------------------------------
     def _colors(self) -> Tuple[RGB, RGB, RGB, RGB]:
@@ -708,33 +1077,36 @@ class VictoryScene(_ResultScene):
         t = self.game.time
         cx = C.WINDOW_W * 0.5
 
-        draw_panel(surface, (272, 70, 736, 512), theme, alpha=190, glow=0.42)
+        draw_panel(surface, (272, 66, 736, 520), theme, alpha=190, glow=0.42)
 
         # ---- heading -----------------------------------------------------
-        head_y = 92.0
+        head_y = 88.0
         glow = 0.55 + 0.30 * pulse(t, 2.0)
         draw_glow_circle(surface, cx, head_y + 40, 260.0, theme.accent, glow * 0.8)
         draw_glow_circle(surface, cx, head_y + 40, 130.0, theme.accent2, glow * 0.7)
         if self.final:
             draw_text(surface, "CAMPAIGN COMPLETE", fonts.title,
                       P.lerp_color(P.UI_WHITE, theme.accent, 0.20),
-                      (cx, head_y + 8), align="center")
+                      (cx, head_y), align="center")
+            sub_y = head_y + 84.0
         else:
             draw_text(surface, "LEVEL CLEAR", fonts.huge,
                       P.lerp_color(P.UI_WHITE, theme.accent, 0.25),
                       (cx, head_y), align="center")
+            sub_y = head_y + 100.0
 
-        sub_y = head_y + (72.0 if self.final else 100.0)
-        draw_text(surface, "LEVEL {:02d}  -  {}".format(self.level_index + 1,
-                                                        self.level_name.upper()),
+        draw_text(surface, "{}  -  {}".format(self._chapter_line(),
+                                              self.level_name.upper()),
                   fonts.body, theme.text_dim, (cx, sub_y), align="center")
 
+        self._draw_difficulty_badge(surface, cx, sub_y + 48.0)
+
         # ---- stars --------------------------------------------------------
-        self._star_y = sub_y + 78.0
+        self._star_y = 292.0
         self._draw_stars(surface)
 
         # ---- score --------------------------------------------------------
-        score_y = self._star_y + 62.0
+        score_y = self._star_y + 60.0
         shown = self.counted(self.score)
         heat = self.count_frac()
         draw_glow_circle(surface, cx, score_y + 30, 170.0, P.UI_GOLD,
@@ -743,27 +1115,12 @@ class VictoryScene(_ResultScene):
                   P.lerp_color(P.UI_WHITE, P.UI_GOLD, 0.5), (cx, score_y),
                   align="center")
 
-        par = get_level(self.level_index).par_score()
-        delta = self.score - par
-        par_col = P.UI_GOOD if delta >= 0 else theme.text_dim
-        draw_text(surface,
-                  "PAR {:,}   ({}{:,})".format(par, "+" if delta >= 0 else "-",
-                                               abs(delta)),
-                  self.game.fonts.small, par_col, (cx, score_y + 66.0),
-                  align="center")
+        self._draw_par_line(surface, cx, score_y + 68.0)
 
         # ---- footer stats --------------------------------------------------
-        foot_y = score_y + 96.0
+        foot_y = score_y + 98.0
         if self.final:
-            try:
-                total = int(self.game.save.total_stars())
-                cap = int(self.game.save.max_stars())
-            except Exception:
-                total, cap = self.stars, LEVEL_COUNT * 3
-            draw_text(surface, "TOTAL STARS  {} / {}".format(self.counted(total), cap),
-                      self.game.fonts.h2,
-                      P.lerp_color(P.UI_GOLD, P.UI_WHITE, 0.25 + 0.2 * pulse(t, 3.0)),
-                      (cx, foot_y), align="center")
+            self._draw_total_stars(surface, cx, foot_y, t)
         else:
             bits = [
                 "FOOD {} / {}".format(self.counted(self.food_eaten), self.goal_food),
@@ -772,13 +1129,39 @@ class VictoryScene(_ResultScene):
             ]
             if self.deaths:
                 bits.append("LIVES LOST {}".format(self.deaths))
-            draw_text(surface, "     ".join(bits), self.game.fonts.small,
+            draw_text(surface, "     ".join(bits), fonts.small,
                       theme.text_dim, (cx, foot_y + 4), align="center")
 
         if self.new_best:
-            draw_text(surface, "NEW BEST", self.game.fonts.h2,
+            draw_text(surface, "NEW BEST", fonts.h2,
                       P.lerp_color(P.UI_GOLD, P.UI_WHITE, 0.3 + 0.3 * pulse(t, 6.0)),
                       (cx, foot_y + 32.0), align="center")
+
+    def _draw_total_stars(self, surface: pygame.Surface, cx: float, y: float,
+                          t: float) -> None:
+        """
+        The campaign tally under CAMPAIGN COMPLETE.
+
+        A story run is counted on the difficulty it was actually played on, so
+        finishing on expert reports the expert tally rather than the
+        difficulty-agnostic "best ever, however you played it" number the free
+        play screens show.
+        """
+        try:
+            save = self.game.save
+            if self.is_story:
+                total = int(save.total_stars(self.diff.key))
+                label = "{} STARS".format(self._diff_label())
+            else:
+                total = int(save.total_stars())
+                label = "TOTAL STARS"
+            cap = int(save.max_stars())
+        except Exception:
+            total, cap, label = self.stars, LEVEL_COUNT * 3, "TOTAL STARS"
+        draw_text(surface, "{}  {} / {}".format(label, self.counted(total), cap),
+                  self.game.fonts.h2,
+                  P.lerp_color(P.UI_GOLD, P.UI_WHITE, 0.25 + 0.2 * pulse(t, 3.0)),
+                  (cx, y), align="center")
 
     def _draw_stars(self, surface: pygame.Surface) -> None:
         """Three slots; earned stars pop in on their own schedule."""

@@ -388,6 +388,15 @@ class Harness:
         self.click(cx, cy, hover_frames=hover_frames)
         return True
 
+    def click_data(self, data: Any, hover_frames: int = 4) -> bool:
+        """Click the button carrying `data` - for the label-less v2 tiles."""
+        button = find_button_by_data(self.game.scene, data)
+        if button is None:
+            return False
+        cx, cy = button.rect.center
+        self.click(cx, cy, hover_frames=hover_frames)
+        return True
+
     def teardown(self) -> None:
         cls, original = self._restore_pause_button
         cls._draw_pause_button = original  # type: ignore[assignment]
@@ -397,21 +406,54 @@ class Harness:
 # Button discovery (explicit per scene - safer than walking __dict__, which
 # would wander into game -> scene cache -> every other scene's buttons)
 # ==========================================================================
+#: Attributes that hold a plain list of Buttons.
+_BUTTON_LISTS = ("_buttons", "buttons")
+
+#: Attributes that hold a list of *records* which each own a ``.button`` -
+#: level-select tiles, mode-select cards, difficulty tiles.  ``cards`` is
+#: shared by LevelSelectScene (records with ``.button``) and StoryScene
+#: (records without one), so the ``hasattr`` filter below is load-bearing.
+_BUTTON_RECORD_LISTS = ("cards", "_cards", "_tiles", "diff_tiles", "_diff_tiles")
+
+#: Attributes that hold a single Button.
+_BUTTON_SINGLES = ("back", "_back", "_restart", "pause_button",
+                   "continue_btn", "skip_btn")
+
+
 def scene_buttons(scene: Any) -> List[Any]:
+    """
+    Every clickable Button a scene owns, in a stable order.
+
+    Deliberately explicit rather than a ``__dict__`` walk: a scene holds a
+    reference to ``game``, and ``game`` holds the scene cache, so a generic
+    walk would wander into every *other* scene's buttons and report a dead
+    control as live.
+    """
     if scene is None:
         return []
     out: List[Any] = []
-    for attr in ("_buttons", "buttons"):
+    seen: set = set()
+
+    def add(button: Any) -> None:
+        if button is None or not hasattr(button, "rect"):
+            return
+        if id(button) in seen:
+            return
+        seen.add(id(button))
+        out.append(button)
+
+    for attr in _BUTTON_LISTS:
         value = getattr(scene, attr, None)
         if isinstance(value, list):
-            out.extend(value)
-    cards = getattr(scene, "cards", None)
-    if isinstance(cards, list):
-        out.extend(card.button for card in cards if hasattr(card, "button"))
-    for attr in ("back", "pause_button"):
+            for button in value:
+                add(button)
+    for attr in _BUTTON_RECORD_LISTS:
         value = getattr(scene, attr, None)
-        if value is not None and hasattr(value, "rect"):
-            out.append(value)
+        if isinstance(value, list):
+            for record in value:
+                add(getattr(record, "button", None))
+    for attr in _BUTTON_SINGLES:
+        add(getattr(scene, attr, None))
     return out
 
 
@@ -422,6 +464,26 @@ def find_button(scene: Any, label: str) -> Any:
         if want and want in got:
             return button
     return None
+
+
+def find_button_by_data(scene: Any, data: Any) -> Any:
+    """
+    Find a button by its ``data`` payload rather than its label.
+
+    Half the v2 controls (level tiles, mode cards, difficulty tiles) carry an
+    empty label on purpose - the scene paints its own art over the button - so
+    label matching cannot reach them.
+    """
+    for button in scene_buttons(scene):
+        if getattr(button, "data", None) == data:
+            return button
+    return None
+
+
+def button_labels(scene: Any) -> List[str]:
+    """Non-empty labels of a scene's buttons, for reporting."""
+    return [str(getattr(b, "label", "")) for b in scene_buttons(scene)
+            if str(getattr(b, "label", "")).strip()]
 
 
 # ==========================================================================
@@ -741,11 +803,23 @@ def run_flow(h: Harness) -> Dict[str, Any]:
     r.check(scene_is(h, "MenuScene"), "help BACK returns to the menu")
 
     # -- menu PLAY ----------------------------------------------------------
-    h.context("menu -> play")
+    # v2: PLAY no longer drops straight into a level.  It opens the mode
+    # picker, and FREE PLAY from there reaches the level select.  The old
+    # expectation ("PLAY -> GameplayScene") described the v1 flow and was the
+    # single check most likely to hide a broken hand-off, so it is replaced by
+    # a walk of the whole new route rather than deleted.
+    h.context("menu -> play -> mode select")
     r.check(h.click_button("PLAY"), "clicked PLAY")
-    h.step(8)
-    r.check(scene_is(h, "GameplayScene"),
-            "PLAY continues into a level (index {})".format(game.level_index))
+    h.step(10)
+    r.check(scene_is(h, "ModeSelectScene"),
+            "PLAY opens the mode picker (got {})".format(h.scene_name()))
+    r.check(h.click_data("free"), "clicked the FREE PLAY card")
+    h.step(20)
+    r.check(scene_is(h, "LevelSelectScene"),
+            "FREE PLAY continues into the level select (got {})".format(
+                h.scene_name()))
+    r.check(game.mode == C.MODE_FREE,
+            "FREE PLAY set game.mode to {!r}".format(game.mode))
 
     return facts
 
@@ -754,6 +828,8 @@ def run_flow(h: Harness) -> Dict[str, Any]:
 # Part 3: scene reuse
 # ==========================================================================
 def run_reuse(h: Harness) -> None:
+    from snake.core import difficulty as D
+
     r = REPORT
     game = h.game
     pilot = Pilot(h)
@@ -783,8 +859,13 @@ def run_reuse(h: Harness) -> None:
     r.check(second.score == 0, "score reset to 0 (got {})".format(second.score))
     r.check(second.food_eaten == 0,
             "food_eaten reset to 0 (got {})".format(second.food_eaten))
-    r.check(second.lives == C.START_LIVES,
-            "lives reset to {}".format(C.START_LIVES))
+    # v2: the life count is the difficulty's, not a global constant.  Asserting
+    # C.START_LIVES here passed only while NORMAL happened to be selected, so
+    # it was a check that measured the test's own leftover state.
+    want_lives = D.lives_for(D.get_difficulty(game.difficulty))
+    r.check(second.lives == want_lives,
+            "lives reset to {} for difficulty {!r} (got {})".format(
+                want_lives, game.difficulty, second.lives))
     r.check(second.combo == 0 and second.max_combo == 0, "combo counters reset")
     r.check(second.deaths == 0, "death counter reset")
     r.check(second.finished is False, "finished flag reset")
@@ -875,22 +956,12 @@ def run_button_walk(h: Harness) -> None:
         return setup
 
     h.context("button walk: menu")
-    visit(to_menu, "PLAY", "GameplayScene")
+    visit(to_menu, "PLAY", "ModeSelectScene")
     visit(to_menu, "LEVELS", "LevelSelectScene")
     visit(to_menu, "HOW TO PLAY", "HelpScene")
-
-    # SOUND toggles in place; verify the state actually flipped.
-    to_menu()
-    h.step(12)
-    was = bool(game.audio.muted)
-    h.click_button("SOUND")
-    h.step(6)
-    r.check(bool(game.audio.muted) != was
-            and h.scene_name() == "MenuScene",
-            "MenuScene / SOUND toggles mute in place ({} -> {})".format(
-                was, game.audio.muted))
-    h.click_button("SOUND")          # put it back
-    h.step(6)
+    # v2 moved the mute toggle off the title screen and into the settings
+    # screen, so the menu's fifth route is SETTINGS rather than SOUND.
+    visit(to_menu, "SETTINGS", "SettingsScene")
 
     # QUIT ends the process loop rather than switching scene.
     to_menu()
@@ -965,6 +1036,1142 @@ def run_button_walk(h: Harness) -> None:
             "GameplayScene / PAUSE       -> PauseScene")
     h.click_button("RESUME")
     h.step(6)
+
+
+# ==========================================================================
+# Part 4b: the v2 flow
+# --------------------------------------------------------------------------
+# Seven scenes were written in parallel by agents who could not see each
+# other's work, against a written contract.  Contracts drift.  Everything
+# below drives the *seams* between those scenes - the hand-offs where one
+# agent's assumption meets another's implementation - rather than the scenes
+# themselves, because that is where a blind parallel build breaks.
+# ==========================================================================
+def wipe_save(h: Harness) -> None:
+    """Put the save back to a fresh-install state between v2 sections."""
+    game = h.game
+    game.save.reset()
+    game.mode = C.DEFAULT_MODE
+    game.difficulty = C.DEFAULT_DIFFICULTY
+    game.save.set_mode(C.DEFAULT_MODE)
+    game.save.set_difficulty(C.DEFAULT_DIFFICULTY)
+    game.save.save()
+
+
+def to_mode_select(h: Harness) -> None:
+    """Reach the mode picker the way a player does: menu, then PLAY."""
+    h.game.switch_scene(C.SCENE_MENU)
+    h.step(16)
+    h.click_button("PLAY")
+    h.step(16)
+
+
+def advance_story(h: Harness, limit: int = 10) -> int:
+    """
+    Click through a StoryScene deck one CONTINUE at a time.
+
+    Each card types itself out before its button does anything useful, so the
+    dwell is generous.  Returns the number of cards advanced past.
+    """
+    seen = 0
+    for _ in range(int(limit)):
+        if h.scene_name() != "StoryScene":
+            break
+        h.step(80)                   # let the typewriter finish
+        if not (h.click_button("CONTINUE") or h.click_button("BEGIN")):
+            break
+        seen += 1
+        h.step(10)
+    return seen
+
+
+def clear_level(h: Harness, pilot: "Pilot", limit: int = 6000) -> bool:
+    """Fly the pilot until the gameplay scene hands over.  True if it won."""
+    play_until(h, pilot, limit, lambda: h.scene_name() != "GameplayScene")
+    return h.scene_name() == "VictoryScene"
+
+
+def run_v2_mode_select(h: Harness) -> None:
+    """Menu PLAY -> mode select -> each difficulty really lands in the save."""
+    from snake.core.save import SaveData
+
+    r = REPORT
+    game = h.game
+    r.head("PART 2b  mode select and the difficulty picker")
+
+    wipe_save(h)
+    h.context("v2: menu -> mode select")
+    game.switch_scene(C.SCENE_MENU)
+    h.step(20)
+    r.check(find_button(game.scene, "PLAY") is not None,
+            "the menu still offers PLAY")
+    r.check(find_button(game.scene, "SETTINGS") is not None,
+            "the menu offers SETTINGS (v2 moved mute off the title screen)")
+    r.check(h.click_button("PLAY"), "clicked PLAY")
+    h.step(16)
+    r.check(scene_is(h, "ModeSelectScene"),
+            "PLAY -> ModeSelectScene (got {})".format(h.scene_name()))
+
+    # The two mode cards and the four difficulty tiles carry an empty label on
+    # purpose (the scene paints its own art), so they are found by data.
+    r.check(find_button_by_data(game.scene, "story") is not None,
+            "the mode picker exposes a STORY card")
+    r.check(find_button_by_data(game.scene, "free") is not None,
+            "the mode picker exposes a FREE PLAY card")
+
+    h.context("v2: difficulty tiles")
+    for key in C.DIFFICULTIES:
+        tile = find_button_by_data(game.scene, ("diff", key))
+        if tile is None:
+            r.fail("mode select has no {!r} difficulty tile".format(key))
+            continue
+        cx, cy = tile.rect.center
+        h.click(cx, cy)
+        h.step(8)
+        game.save.save()
+        on_disk = SaveData.load(h.save_path)
+        ok = (game.difficulty == key and game.save.difficulty == key
+              and on_disk.difficulty == key and scene_is(h, "ModeSelectScene"))
+        r.check(ok, "difficulty tile {:<6} -> game={!r} save={!r} on disk={!r}"
+                    .format(key, game.difficulty, game.save.difficulty,
+                            on_disk.difficulty))
+
+    h.context("v2: mode select BACK")
+    r.check(h.click_button("BACK"), "clicked BACK on the mode picker")
+    h.step(12)
+    r.check(scene_is(h, "MenuScene"), "mode select BACK -> MenuScene")
+
+    # FREE PLAY sets the mode and reaches the level select.
+    h.context("v2: FREE PLAY card")
+    to_mode_select(h)
+    r.check(h.click_data("free"), "clicked the FREE PLAY card")
+    h.step(20)
+    r.check(scene_is(h, "LevelSelectScene") and game.mode == C.MODE_FREE,
+            "FREE PLAY -> LevelSelectScene with game.mode={!r}".format(game.mode))
+
+
+def run_v2_story(h: Harness) -> None:
+    """The whole narrative spine: prologue, a cleared level, the hand-back."""
+    from snake.core import story as S
+    from snake.core.level import LEVEL_COUNT
+    from snake.core.save import SaveData
+
+    r = REPORT
+    game = h.game
+    pilot = Pilot(h)
+    r.head("PART 2c  story mode, end to end")
+
+    wipe_save(h)
+    game.difficulty = C.DIFF_EASY        # the pilot clears level 1 reliably
+    game.save.set_difficulty(C.DIFF_EASY)
+
+    h.context("v2: story start")
+    to_mode_select(h)
+    r.check(h.click_data("story"), "clicked the STORY card")
+    h.step(40)
+    r.check(scene_is(h, "StoryScene"),
+            "STORY -> StoryScene (got {})".format(h.scene_name()))
+    r.check(game.mode == C.MODE_STORY,
+            "game.mode is {!r}".format(game.mode))
+
+    scene = game.scene
+    cards = list(getattr(scene, "cards", []))
+    r.check(len(cards) >= 2,
+            "the story presenter was handed {} cards".format(len(cards)))
+    r.check(any(str(getattr(c, "roman", "")) for c in cards),
+            "one of them is a chapter plate (romans: {})".format(
+                [str(getattr(c, "roman", "")) for c in cards]))
+    r.check(getattr(scene, "next_scene", None) == C.SCENE_GAME,
+            "the deck hands over to {!r}".format(getattr(scene, "next_scene", None)))
+    r.check(dict(getattr(scene, "next_kwargs", {})).get("level_index") == 0,
+            "...with level_index 0 ({!r})".format(getattr(scene, "next_kwargs", {})))
+    r.check(find_button(scene, "SKIP") is not None,
+            "the story presenter offers SKIP")
+
+    # SKIP must jump the whole deck straight into the level.
+    h.context("v2: story SKIP")
+    h.step(20)
+    r.check(h.click_button("SKIP"), "clicked SKIP")
+    h.step(16)
+    r.check(scene_is(h, "GameplayScene") and game.level_index == 0,
+            "SKIP jumps the deck into level 1 (got {} index {})".format(
+                h.scene_name(), game.level_index))
+
+    # Now do it properly, card by card.
+    h.context("v2: story CONTINUE")
+    to_mode_select(h)
+    h.click_data("story")
+    h.step(40)
+    r.check(scene_is(h, "StoryScene"), "back on the story cards")
+    shown = advance_story(h)
+    r.check(shown >= 2, "clicked CONTINUE through {} cards".format(shown))
+    r.check(scene_is(h, "GameplayScene") and game.level_index == 0,
+            "the last card leads into level 1 (got {} index {})".format(
+                h.scene_name(), game.level_index))
+    r.check(game.mode == C.MODE_STORY, "still in story mode inside the level")
+
+    # -- clear it -----------------------------------------------------------
+    h.context("v2: clearing story level 1")
+    won = clear_level(h, pilot)
+    r.check(won, "story level 1 ends in VictoryScene (got {})".format(
+        h.scene_name()))
+    if not won:
+        return
+    result = dict(game.last_result)
+    r.check(result.get("mode") == C.MODE_STORY and result.get("story") is True,
+            "the result is stamped as a story run")
+    r.check(int(result.get("next_index", -1)) == 1,
+            "the result names next_index 1 (got {})".format(
+                result.get("next_index")))
+    r.check(game.save.story_progress == 1,
+            "save.story_progress advanced to 1 (got {})".format(
+                game.save.story_progress))
+
+    h.step(90)                       # star ceremony
+    labels = button_labels(game.scene)
+    r.check("CONTINUE" in labels,
+            "the story victory screen offers CONTINUE (buttons: {})".format(
+                labels))
+    r.check("NEXT LEVEL" not in labels,
+            "...and not the free-play NEXT LEVEL (buttons: {})".format(labels))
+
+    h.context("v2: victory -> story -> level 2")
+    r.check(h.click_button("CONTINUE"), "clicked CONTINUE")
+    h.step(20)
+    r.check(scene_is(h, "StoryScene"),
+            "CONTINUE goes back through StoryScene (got {})".format(
+                h.scene_name()))
+    scene = game.scene
+    titles = [str(getattr(c, "title", "")) for c in getattr(scene, "cards", [])]
+    beat0, beat1 = S.get_beat(0), S.get_beat(1)
+    r.check(beat0.title in titles,
+            "the deck carries level 1's outro ({!r} in {})".format(
+                beat0.title, titles))
+    r.check(beat1.title in titles,
+            "the deck carries level 2's intro ({!r} in {})".format(
+                beat1.title, titles))
+    r.check(dict(getattr(scene, "next_kwargs", {})).get("level_index") == 1,
+            "the deck hands over with level_index 1 ({!r})".format(
+                getattr(scene, "next_kwargs", {})))
+    r.check(game.save.beat_seen(0),
+            "beat 0 was marked seen ({})".format(sorted(game.save.seen_beats)))
+
+    advance_story(h)
+    r.check(scene_is(h, "GameplayScene") and game.level_index == 1,
+            "level 2 starts (got {} index {})".format(
+                h.scene_name(), game.level_index))
+
+    game.save.save()
+    on_disk = SaveData.load(h.save_path)
+    r.check(on_disk.story_progress >= 1,
+            "the save file on disk holds story_progress {}".format(
+                on_disk.story_progress))
+    r.check(0 in on_disk.seen_beats,
+            "the save file on disk holds the seen beat ({})".format(
+                sorted(on_disk.seen_beats)))
+
+    # -- the final level ----------------------------------------------------
+    h.context("v2: the final level")
+    last = LEVEL_COUNT - 1
+    game.mode = C.MODE_STORY
+    game.save.unlock_through(last)
+    game.last_result = {
+        "score": 1200, "level_index": last, "level_name": "Prism Core",
+        "food_eaten": 30, "goal_food": 30, "stars": 3, "new_best": True,
+        "won": True, "elapsed": 95.0, "max_combo": 9, "deaths": 0,
+        "mode": C.MODE_STORY, "story": True, "next_index": last + 1,
+        "final_level": True, "story_complete": True,
+        "difficulty": game.difficulty,
+    }
+    game.switch_scene(C.SCENE_VICTORY)
+    h.step(100)
+    labels = button_labels(game.scene)
+    r.check("CONTINUE" in labels,
+            "the final-level victory still offers CONTINUE ({})".format(labels))
+    r.check("NEXT LEVEL" not in labels,
+            "...and no NEXT LEVEL past the end ({})".format(labels))
+    r.check(h.click_button("CONTINUE"), "clicked CONTINUE on the last level")
+    h.step(20)
+    r.check(scene_is(h, "StoryScene"),
+            "the last CONTINUE opens the epilogue deck (got {})".format(
+                h.scene_name()))
+    scene = game.scene
+    titles = [str(getattr(c, "title", "")) for c in getattr(scene, "cards", [])]
+    r.check(str(S.EPILOGUE.title) in titles,
+            "the epilogue card is in the deck ({!r} in {})".format(
+                S.EPILOGUE.title, titles))
+    r.check(getattr(scene, "next_scene", None) == C.SCENE_MENU,
+            "the epilogue hands back to the menu (got {!r})".format(
+                getattr(scene, "next_scene", None)))
+    r.check(game.save.story_complete,
+            "save.story_complete is set")
+    advance_story(h)
+    r.check(scene_is(h, "MenuScene"),
+            "the epilogue returns to the menu (got {})".format(h.scene_name()))
+
+    game.save.save()
+    on_disk = SaveData.load(h.save_path)
+    r.check(on_disk.story_complete,
+            "the save file on disk records the campaign as complete")
+
+    # An empty deck must not strand the player on a blank screen.
+    h.context("v2: empty story deck")
+    game.switch_scene(C.SCENE_STORY, cards=[], next_scene=C.SCENE_MENU,
+                      next_kwargs={})
+    h.step(10)
+    r.check(scene_is(h, "MenuScene"),
+            "an empty card deck passes straight through (got {})".format(
+                h.scene_name()))
+
+
+def run_v2_free_play(h: Harness) -> None:
+    """Free play: the level select header really re-reads per-difficulty."""
+    r = REPORT
+    game = h.game
+    pilot = Pilot(h)
+    r.head("PART 2d  free play and the per-difficulty level select")
+
+    wipe_save(h)
+    game.save.unlock_through(3)
+    # Two different records for the same level under two difficulties: the
+    # header switch is only meaningful if the cards actually re-read.
+    game.save.record(0, 900, 3, difficulty=C.DIFF_NORMAL)
+    game.save.record(0, 120, 1, difficulty=C.DIFF_HARD)
+    game.difficulty = C.DIFF_NORMAL
+    game.save.set_difficulty(C.DIFF_NORMAL)
+
+    h.context("v2: menu -> levels")
+    game.switch_scene(C.SCENE_MENU)
+    h.step(16)
+    r.check(h.click_button("LEVELS"), "clicked LEVELS")
+    h.step(50)
+    r.check(scene_is(h, "LevelSelectScene"), "LEVELS -> LevelSelectScene")
+    r.check(game.mode == C.MODE_FREE,
+            "LEVELS set game.mode to {!r}".format(game.mode))
+
+    def record0() -> Any:
+        return getattr(game.scene, "_records", [None])[0]
+
+    before = record0()
+    r.check(before is not None and int(getattr(before, "best", 0)) == 900,
+            "on NORMAL the level 1 card reads best 900 (got {})".format(
+                getattr(before, "best", None)))
+    r.check(int(getattr(before, "stars", 0)) == 3,
+            "...and 3 stars (got {})".format(getattr(before, "stars", None)))
+
+    h.context("v2: level select difficulty switch")
+    for key, want_best, want_stars in ((C.DIFF_HARD, 120, 1),
+                                       (C.DIFF_EXPERT, 0, 0),
+                                       (C.DIFF_NORMAL, 900, 3)):
+        r.check(h.click_data(key), "clicked the {} header tile".format(key))
+        h.step(24)
+        rec = record0()
+        ok = (game.difficulty == key
+              and rec is not None
+              and int(getattr(rec, "best", -1)) == want_best
+              and int(getattr(rec, "stars", -1)) == want_stars)
+        r.check(ok, "header {:<6} -> game.difficulty={!r}, card reads "
+                    "best={} stars={}".format(
+                        key, game.difficulty,
+                        getattr(rec, "best", None), getattr(rec, "stars", None)))
+        r.check(scene_is(h, "LevelSelectScene"),
+                "...and stayed on the level select")
+
+    h.context("v2: free play victory buttons")
+    game.difficulty = C.DIFF_EASY
+    tile = find_button_by_data(game.scene, 0)
+    r.check(tile is not None, "the level select exposes tile 1")
+    if tile is not None:
+        cx, cy = tile.rect.center
+        h.click(cx, cy)
+        h.step(24)
+    r.check(scene_is(h, "GameplayScene") and game.level_index == 0,
+            "tile 1 starts level 1 in free mode (got {})".format(h.scene_name()))
+    r.check(game.mode == C.MODE_FREE, "the run is a free-play run")
+
+    won = clear_level(h, pilot)
+    r.check(won, "the free-play level clears (got {})".format(h.scene_name()))
+    if not won:
+        return
+    h.step(90)
+    labels = button_labels(game.scene)
+    for want in ("NEXT LEVEL", "REPLAY", "LEVEL SELECT", "MENU"):
+        r.check(want in labels,
+                "free victory offers {:<12} (buttons: {})".format(want, labels))
+    r.check("CONTINUE" not in labels,
+            "free victory does NOT offer the story CONTINUE ({})".format(labels))
+
+
+def run_v2_settings(h: Harness) -> None:
+    """Settings from both entry points, every control, and the reset guard."""
+    from snake.core.save import SaveData
+
+    r = REPORT
+    game = h.game
+    r.head("PART 2e  settings, from the menu and from the pause overlay")
+
+    wipe_save(h)
+
+    # -- from the menu -------------------------------------------------------
+    h.context("v2: settings from the menu")
+    game.switch_scene(C.SCENE_MENU)
+    h.step(16)
+    r.check(h.click_button("SETTINGS"), "clicked SETTINGS on the menu")
+    h.step(20)
+    r.check(scene_is(h, "SettingsScene"),
+            "menu SETTINGS -> SettingsScene (got {})".format(h.scene_name()))
+
+    h.context("v2: display mode")
+    seen_modes = [game.display_mode]
+    for _ in range(len(C.DISPLAY_MODES) + 1):
+        if not h.click_data("display_next"):
+            r.fail("settings has no display-mode control")
+            break
+        h.step(8)
+        seen_modes.append(game.display_mode)
+    r.check(set(seen_modes) == set(C.DISPLAY_MODES),
+            "cycling display mode visits every mode ({})".format(
+                " -> ".join(seen_modes)))
+    r.check(h.click_data("display_prev"), "the display-mode '<' arrow exists")
+    h.step(8)
+    game.save.save()
+    r.check(SaveData.load(h.save_path).display_mode == game.display_mode,
+            "the display mode is persisted ({!r})".format(game.display_mode))
+
+    h.context("v2: visual effect toggles")
+    fx = game.fx
+    flags = (("bloom", "bloom_enabled"), ("scanlines", "scanlines_enabled"),
+             ("grain", "grain_enabled"), ("shake", "shake_enabled"))
+    for key, attr in flags:
+        before = bool(getattr(fx, attr, True))
+        if not h.click_data("fx:" + key):
+            r.fail("settings has no {!r} toggle".format(key))
+            continue
+        h.step(8)
+        after = bool(getattr(fx, attr, before))
+        r.check(after != before,
+                "fx toggle {:<10} flipped {} -> {}".format(key, before, after))
+        h.click_data("fx:" + key)    # put it back
+        h.step(6)
+        r.check(bool(getattr(fx, attr, None)) == before,
+                "fx toggle {:<10} restores".format(key))
+
+    h.context("v2: sound")
+    was = bool(game.audio.muted)
+    r.check(h.click_data("sound"), "clicked the SOUND control")
+    h.step(8)
+    r.check(bool(game.audio.muted) != was,
+            "SOUND flips mute {} -> {}".format(was, game.audio.muted))
+    game.save.save()
+    r.check(SaveData.load(h.save_path).muted == bool(game.audio.muted),
+            "mute is persisted")
+    h.click_data("sound")
+    h.step(6)
+    r.check(bool(game.audio.muted) == was, "SOUND flips back")
+
+    h.context("v2: difficulty chips")
+    for key in C.DIFFICULTIES:
+        if not h.click_data("diff:" + key):
+            r.fail("settings has no {!r} chip".format(key))
+            continue
+        h.step(8)
+        r.check(game.difficulty == key and scene_is(h, "SettingsScene"),
+                "settings chip {:<6} -> game.difficulty={!r}".format(
+                    key, game.difficulty))
+
+    # -- the reset guard -----------------------------------------------------
+    h.context("v2: RESET PROGRESS needs its confirm step")
+    game.save.unlock_through(6)
+    game.save.record(0, 777, 3, difficulty=game.difficulty)
+    game.save.save()
+    guarded = SaveData.load(h.save_path)
+    r.check(guarded.best_for(0, difficulty=game.difficulty) == 777,
+            "seeded a best score to wipe ({})".format(
+                guarded.best_for(0, difficulty=game.difficulty)))
+
+    r.check(h.click_data("reset"), "clicked RESET PROGRESS")
+    h.step(10)
+    r.check(game.save.best_for(0, difficulty=game.difficulty) == 777,
+            "one click does NOT wipe the save (best still {})".format(
+                game.save.best_for(0, difficulty=game.difficulty)))
+    r.check(find_button_by_data(game.scene, "reset_confirm") is not None,
+            "a CONFIRM button appeared")
+    r.check(find_button_by_data(game.scene, "reset_cancel") is not None,
+            "a CANCEL button appeared")
+
+    r.check(h.click_data("reset_cancel"), "clicked CANCEL")
+    h.step(10)
+    r.check(game.save.best_for(0, difficulty=game.difficulty) == 777,
+            "CANCEL leaves the save alone")
+    r.check(find_button_by_data(game.scene, "reset") is not None,
+            "the row went back to RESET PROGRESS")
+
+    h.click_data("reset")
+    h.step(10)
+    r.check(h.click_data("reset_confirm"), "clicked CONFIRM")
+    h.step(10)
+    r.check(game.save.best_for(0, difficulty=game.difficulty) == 0,
+            "CONFIRM wipes the save (best now {})".format(
+                game.save.best_for(0, difficulty=game.difficulty)))
+    r.check(not game.save.is_unlocked(6),
+            "CONFIRM relocked the levels")
+
+    h.context("v2: settings BACK returns to the menu")
+    r.check(h.click_button("BACK"), "clicked BACK")
+    h.step(12)
+    r.check(scene_is(h, "MenuScene"),
+            "settings opened from the menu backs out to the menu (got {})"
+            .format(h.scene_name()))
+
+    # -- from the pause overlay ---------------------------------------------
+    h.context("v2: settings from the pause overlay")
+    game.switch_scene(C.SCENE_GAME, level_index=0)
+    h.step(8)
+    game.push_scene(C.SCENE_PAUSE)
+    h.step(12)
+    r.check(scene_is(h, "PauseScene"), "paused a live run")
+    r.check(find_button(game.scene, "SETTINGS") is not None,
+            "the pause overlay offers SETTINGS (buttons: {})".format(
+                button_labels(game.scene)))
+    depth = len(game._stack)
+    r.check(h.click_button("SETTINGS"), "clicked SETTINGS on the pause overlay")
+    h.step(16)
+    r.check(scene_is(h, "SettingsScene"),
+            "pause SETTINGS -> SettingsScene (got {})".format(h.scene_name()))
+    r.check(len(game._stack) == depth + 1,
+            "settings is stacked, not switched: depth {} -> {}".format(
+                depth, len(game._stack)))
+    r.check([type(s).__name__ for s in game._stack]
+            == ["GameplayScene", "PauseScene", "SettingsScene"],
+            "the live run survives underneath ({})".format(
+                [type(s).__name__ for s in game._stack]))
+
+    h.context("v2: settings BACK returns to the pause overlay")
+    r.check(h.click_button("BACK"), "clicked BACK")
+    h.step(12)
+    r.check(scene_is(h, "PauseScene"),
+            "settings opened from pause backs out to pause, not the menu "
+            "(got {})".format(h.scene_name()))
+    r.check([type(s).__name__ for s in game._stack]
+            == ["GameplayScene", "PauseScene"],
+            "the stack unwound cleanly ({})".format(
+                [type(s).__name__ for s in game._stack]))
+    r.check(h.click_button("RESUME"), "clicked RESUME")
+    h.step(8)
+    r.check(scene_is(h, "GameplayScene"),
+            "the run resumes after the settings detour (got {})".format(
+                h.scene_name()))
+
+
+def run_v2_difficulty_play(h: Harness) -> None:
+    """
+    One real level on each difficulty, asserting the settings actually bite.
+
+    A difficulty screen that writes a string nobody reads is exactly the kind
+    of defect a seven-way parallel build produces, so this measures the three
+    things the player can feel: how many lives they get, how fast the snake
+    moves, and whether their own tail kills them.
+    """
+    from snake.core import difficulty as D
+
+    r = REPORT
+    game = h.game
+    pilot = Pilot(h)
+    r.head("PART 2f  one level on each difficulty (the settings must bite)")
+
+    wipe_save(h)
+    game.save.unlock_through(3)
+    game.mode = C.MODE_FREE
+
+    r.log("  {:<8} {:>6} {:>10} {:>10} {:>10} {:>7} {:>6}".format(
+        "diff", "lives", "speed", "selfkill", "skip", "frames", "eaten"))
+    r.log("  " + "-" * 62)
+
+    seen: Dict[str, Dict[str, Any]] = {}
+    for key in C.DIFFICULTIES:
+        diff = D.get_difficulty(key)
+        game.difficulty = key
+        game.save.set_difficulty(key)
+        h.context("v2: playing level 1 on {}".format(key))
+        game.switch_scene(C.SCENE_GAME, level_index=0)
+        h.step(6)
+        scene = game.scene
+        scene.ready_timer = 0.0
+        h.step(2)
+
+        # Snapshot what the scene resolved out of the difficulty.
+        info = {
+            "lives": int(getattr(scene, "lives", -1)),
+            "speed": float(getattr(scene.snake, "speed", 0.0)),
+            "self_enabled": bool(getattr(scene, "self_enabled", True)),
+            "self_skip": getattr(scene, "self_skip", None),
+            "diff_key": getattr(getattr(scene, "diff", None), "key", None),
+        }
+        eaten_before = int(scene.food_eaten)
+        play_until(h, pilot, 900, lambda: h.scene_name() != "GameplayScene")
+        live = game.scene if h.scene_name() == "GameplayScene" else None
+        info["eaten"] = (int(live.food_eaten) - eaten_before) if live is not None \
+            else int(game.last_result.get("food_eaten", 0))
+        seen[key] = info
+
+        r.log("  {:<8} {:>6} {:>10.1f} {:>10} {:>10} {:>7} {:>6}".format(
+            key, info["lives"], info["speed"],
+            str(info["self_enabled"]), str(info["self_skip"]), 900,
+            info["eaten"]))
+
+        r.check(info["diff_key"] == key,
+                "{:<6} the level resolved difficulty {!r}".format(
+                    key, info["diff_key"]))
+        r.check(info["lives"] == D.lives_for(diff),
+                "{:<6} lives = {} (difficulty says {})".format(
+                    key, info["lives"], D.lives_for(diff)))
+        r.check(info["self_enabled"] == D.self_collision_enabled(diff),
+                "{:<6} self-collision enabled = {} (difficulty says {})".format(
+                    key, info["self_enabled"], D.self_collision_enabled(diff)))
+
+    # -- and now the differences ------------------------------------------
+    lives = [seen[k]["lives"] for k in C.DIFFICULTIES]
+    speeds = [seen[k]["speed"] for k in C.DIFFICULTIES]
+    kills = [seen[k]["self_enabled"] for k in C.DIFFICULTIES]
+
+    r.check(len(set(lives)) == len(lives),
+            "every difficulty grants a different number of lives ({})".format(
+                lives))
+    r.check(lives == sorted(lives, reverse=True),
+            "lives fall as difficulty rises ({})".format(lives))
+    r.check(len(set(round(s, 3) for s in speeds)) == len(speeds),
+            "every difficulty runs at a different speed ({})".format(
+                [round(s, 1) for s in speeds]))
+    r.check(speeds == sorted(speeds),
+            "speed rises with difficulty ({})".format(
+                [round(s, 1) for s in speeds]))
+    r.check(kills[0] is False and all(kills[1:]),
+            "EASY forgives the tail and the rest do not ({})".format(kills))
+    skips = [seen[k]["self_skip"] for k in C.DIFFICULTIES[1:]]
+    r.check(len(set(skips)) == len(skips),
+            "the lethal difficulties use different forgiveness windows "
+            "({})".format(skips))
+
+
+# ==========================================================================
+# Part 4c: every button on every scene
+# ==========================================================================
+def _fingerprint(h: Harness) -> Tuple[Any, ...]:
+    """
+    A cheap snapshot of everything a button is allowed to change.
+
+    Used to prove that an *in-place* control (a difficulty chip, an fx toggle,
+    the mute button) did something, since it cannot be judged by a scene
+    change.  Dead buttons are the signature defect of a parallel build, and
+    "the scene did not change" is exactly what a dead button looks like.
+    """
+    game = h.game
+    scene = game.scene
+    fx = game.fx
+    parts: List[Any] = [
+        h.scene_name(), len(game._stack),
+        str(game.difficulty), str(game.mode), str(game.display_mode),
+        bool(getattr(game.audio, "muted", False)),
+        int(getattr(game, "level_index", 0)), bool(game.running),
+        tuple(button_labels(scene)),
+        tuple(bool(getattr(b, "enabled", True)) for b in scene_buttons(scene)),
+    ]
+    for attr in ("confirming", "index", "_restart_arm", "focus",
+                 "_launching", "back_target", "done"):
+        parts.append(repr(getattr(scene, attr, None)))
+    for attr in ("bloom_enabled", "scanlines_enabled", "grain_enabled",
+                 "shake_enabled"):
+        parts.append(repr(getattr(fx, attr, None)))
+    try:
+        parts.append(repr(sorted(game.save.to_dict().items())))
+    except Exception:
+        parts.append("save?")
+    return tuple(parts)
+
+
+def run_v2_button_walk(h: Harness) -> None:
+    """
+    Click *every* button on *every* scene and require an observable effect.
+
+    The existing button walk checks the routes we know about by label.  This
+    one is exhaustive and label-blind: it enumerates whatever each scene
+    actually owns, so a control that was added but never wired - or one whose
+    handler silently swallows its own exception - is caught.
+    """
+    r = REPORT
+    game = h.game
+    r.head("PART 4b  every button on every scene leads somewhere")
+
+    wipe_save(h)
+    game.save.unlock_through(11)
+    game.mode = C.MODE_FREE
+
+    def result(index: int, won: bool, story: bool) -> Dict[str, Any]:
+        return {
+            "score": 260, "level_index": index, "level_name": "Deep Nebula",
+            "food_eaten": 10, "goal_food": 10, "stars": 2, "new_best": True,
+            "won": won, "elapsed": 42.0, "max_combo": 5,
+            "deaths": 0 if won else 3,
+            "mode": C.MODE_STORY if story else C.MODE_FREE, "story": story,
+            "next_index": index + 1, "final_level": index >= 11,
+            "difficulty": game.difficulty,
+        }
+
+    def enter_menu() -> None:
+        game.switch_scene(C.SCENE_MENU)
+
+    def enter_mode() -> None:
+        # RESTART STORY only exists once there is a campaign to erase, and it
+        # is gated in draw *and* in handle_event.  Seed some progress so the
+        # walk exercises the live control instead of excusing a hidden one.
+        game.save.set_story_progress(4)
+        game.switch_scene(C.SCENE_MODE)
+
+    def enter_levels() -> None:
+        game.switch_scene(C.SCENE_LEVELS)
+
+    def enter_help() -> None:
+        game.switch_scene(C.SCENE_HELP)
+
+    def enter_settings() -> None:
+        game.switch_scene(C.SCENE_SETTINGS, back=C.SCENE_MENU)
+
+    def enter_story() -> None:
+        from snake.core import story as S
+        game.switch_scene(C.SCENE_STORY, cards=[S.get_chapter(0), S.get_beat(0)],
+                          next_scene=C.SCENE_GAME, next_kwargs={"level_index": 0})
+
+    def enter_game() -> None:
+        game.switch_scene(C.SCENE_GAME, level_index=0)
+
+    def enter_pause() -> None:
+        game.switch_scene(C.SCENE_GAME, level_index=1)
+        h.step(4)
+        game.push_scene(C.SCENE_PAUSE)
+
+    def enter_victory_free() -> None:
+        game.mode = C.MODE_FREE
+        game.last_result = result(1, True, False)
+        game.switch_scene(C.SCENE_VICTORY)
+
+    def enter_victory_story() -> None:
+        game.mode = C.MODE_STORY
+        game.last_result = result(1, True, True)
+        game.switch_scene(C.SCENE_VICTORY)
+
+    def enter_gameover_free() -> None:
+        game.mode = C.MODE_FREE
+        game.last_result = result(1, False, False)
+        game.switch_scene(C.SCENE_GAMEOVER)
+
+    def enter_gameover_story() -> None:
+        game.mode = C.MODE_STORY
+        game.last_result = result(1, False, True)
+        game.switch_scene(C.SCENE_GAMEOVER)
+
+    screens: List[Tuple[str, Callable[[], None], int]] = [
+        ("MenuScene", enter_menu, 20),
+        ("ModeSelectScene", enter_mode, 30),
+        ("LevelSelectScene", enter_levels, 55),
+        ("SettingsScene", enter_settings, 20),
+        ("StoryScene", enter_story, 60),
+        ("HelpScene", enter_help, 30),
+        ("PauseScene", enter_pause, 16),
+        ("GameplayScene", enter_game, 16),
+        ("VictoryScene (free)", enter_victory_free, 95),
+        ("VictoryScene (story)", enter_victory_story, 95),
+        ("GameOverScene (free)", enter_gameover_free, 85),
+        ("GameOverScene (story)", enter_gameover_story, 85),
+    ]
+
+    total_buttons = 0
+    dead: List[str] = []
+    for name, enter, settle in screens:
+        h.context("button walk v2: " + name)
+        enter()
+        h.step(settle)
+        buttons = scene_buttons(game.scene)
+        count = len(buttons)
+        total_buttons += count
+        r.check(count > 0, "{:<22} owns {} button(s)".format(name, count))
+
+        for i in range(count):
+            enter()
+            h.step(settle)
+            here = scene_buttons(game.scene)
+            if i >= len(here):
+                break
+            button = here[i]
+            label = str(getattr(button, "label", "")) or "<{!r}>".format(
+                getattr(button, "data", i))
+            if not getattr(button, "enabled", True):
+                continue
+            before = _fingerprint(h)
+            cx, cy = button.rect.center
+            h.click(cx, cy)
+            h.step(20)
+            after = _fingerprint(h)
+            if after == before:
+                dead.append("{} / {}".format(name, label))
+            # QUIT stops the loop rather than switching scene; put it back.
+            if not game.running:
+                game.running = True
+
+    r.check(not dead,
+            "all {} buttons across {} screens did something ({} dead)".format(
+                total_buttons, len(screens), len(dead)))
+    for line in dead[:20]:
+        r.log("         dead: " + line)
+
+    # The inverse of the walk: a control the scene decides *not* to show must
+    # not still be sitting there as an invisible click target.  RESTART STORY
+    # is the only conditional button in the build, so it is the only one that
+    # can get this wrong.
+    h.context("button walk v2: hidden controls stay inert")
+    wipe_save(h)
+    game.switch_scene(C.SCENE_MODE)
+    h.step(30)
+    scene = game.scene
+    r.check(not scene._show_restart(),
+            "on a fresh save the mode picker hides RESTART STORY")
+    before = _fingerprint(h)
+    hidden = find_button(scene, "RESTART STORY")
+    if hidden is not None:
+        cx, cy = hidden.rect.center
+        h.click(cx, cy)
+        h.step(16)
+    r.check(_fingerprint(h) == before,
+            "clicking where the hidden RESTART STORY sits does nothing")
+    r.check(scene_is(h, "ModeSelectScene"),
+            "...and does not navigate anywhere (got {})".format(h.scene_name()))
+
+
+# ==========================================================================
+# Part 4d: every button survives the CRT bezel
+# ==========================================================================
+#: Least fraction of a button's drawn brightness that must reach the screen.
+#: The finished frame is pushed through `EffectStack.present`, which lays a
+#: 0.80 vignette, a 0.62 squircle edge rolloff and an opaque rounded corner cut
+#: over everything - so a control can be perfectly correct, perfectly clickable
+#: and still invisible to the player.  0.40 is set just under the worst
+#: long-standing v1 control (VictoryScene / MENU at 0.47) so the check pins
+#: today's layout without demanding a redesign of the result screens.
+BEZEL_FLOOR = 0.40
+
+
+def _mean_luma(surface: pygame.Surface, rect: pygame.Rect) -> float:
+    """Mean of the brightest channel over `rect`, on a 1-in-2 subsample."""
+    r = rect.clip(pygame.Rect(0, 0, *surface.get_size()))
+    if r.w < 2 or r.h < 2:
+        return 0.0
+    total, count = 0, 0
+    for x in range(r.x, r.right, 2):
+        for y in range(r.y, r.bottom, 2):
+            px = surface.get_at((x, y))
+            total += max(px[0], px[1], px[2])
+            count += 1
+    return total / float(max(1, count))
+
+
+def run_v2_legibility(h: Harness) -> None:
+    """
+    Assert every button is still legible *after* the post-processing.
+
+    Every other check in this file reads game state, and game state cannot see
+    this class of defect: the button exists, its handler fires, the flow works
+    - and the player cannot see it.  Four v2 controls sat in the bezel when
+    this check was written (LevelSelect BACK passed 4% of its own light), which
+    is exactly the kind of thing seven agents rendering to a canvas they never
+    post-process will each get wrong independently.
+    """
+    r = REPORT
+    game = h.game
+    r.head("PART 4c  every button survives the CRT bezel")
+
+    wipe_save(h)
+    game.save.unlock_through(11)
+    game.save.set_story_progress(4)
+
+    def result(index: int, won: bool, story: bool) -> Dict[str, Any]:
+        return {
+            "score": 260, "level_index": index, "level_name": "Deep Nebula",
+            "food_eaten": 10, "goal_food": 10, "stars": 2, "new_best": True,
+            "won": won, "elapsed": 42.0, "max_combo": 5,
+            "deaths": 0 if won else 3,
+            "mode": C.MODE_STORY if story else C.MODE_FREE, "story": story,
+            "next_index": index + 1, "final_level": False,
+            "difficulty": game.difficulty,
+        }
+
+    def story_deck() -> None:
+        from snake.core import story as S
+        game.switch_scene(C.SCENE_STORY, cards=[S.get_chapter(0), S.get_beat(0)],
+                          next_scene=C.SCENE_MENU, next_kwargs={})
+
+    def pause() -> None:
+        game.switch_scene(C.SCENE_GAME, level_index=1)
+        h.step(4)
+        game.push_scene(C.SCENE_PAUSE)
+
+    def victory(story: bool) -> Callable[[], None]:
+        def setup() -> None:
+            game.mode = C.MODE_STORY if story else C.MODE_FREE
+            game.last_result = result(1, True, story)
+            game.switch_scene(C.SCENE_VICTORY)
+        return setup
+
+    def gameover() -> None:
+        game.mode = C.MODE_FREE
+        game.last_result = result(1, False, False)
+        game.switch_scene(C.SCENE_GAMEOVER)
+
+    screens: List[Tuple[str, Callable[[], None], int]] = [
+        ("MenuScene", lambda: game.switch_scene(C.SCENE_MENU), 40),
+        ("ModeSelectScene", lambda: game.switch_scene(C.SCENE_MODE), 50),
+        ("LevelSelectScene", lambda: game.switch_scene(C.SCENE_LEVELS), 70),
+        ("SettingsScene",
+         lambda: game.switch_scene(C.SCENE_SETTINGS, back=C.SCENE_MENU), 40),
+        ("StoryScene", story_deck, 220),
+        ("HelpScene", lambda: game.switch_scene(C.SCENE_HELP), 45),
+        ("PauseScene", pause, 45),
+        ("GameplayScene", lambda: game.switch_scene(C.SCENE_GAME, level_index=0), 40),
+        ("VictoryScene", victory(False), 140),
+        ("VictoryScene/story", victory(True), 140),
+        ("GameOverScene", gameover, 120),
+    ]
+
+    r.log("  {:<20} {:<18} {:>8} {:>8} {:>7}  {}".format(
+        "scene", "button", "canvas", "screen", "ratio", "verdict"))
+    r.log("  " + "-" * 72)
+
+    dim: List[str] = []
+    checked = 0
+    for name, enter, settle in screens:
+        h.context("legibility: " + name)
+        enter()
+        # The scene-change wipe is itself a full-screen overlay, so the frame
+        # has to be fully settled or every button would read as "dark".
+        h.step(settle)
+        for button in scene_buttons(game.scene):
+            if not getattr(button, "enabled", True):
+                continue
+            rect = pygame.Rect(button.rect)
+            drawn = _mean_luma(game.canvas, rect)
+            shown = _mean_luma(game.screen, rect)
+            if drawn < 1.0:
+                continue          # nothing was drawn there this frame
+            ratio = shown / drawn
+            checked += 1
+            label = (str(getattr(button, "label", ""))
+                     or str(getattr(button, "data", "")))[:18]
+            if ratio < BEZEL_FLOOR:
+                dim.append("{} / {} at {} -> {:.2f}".format(
+                    name, label, tuple(rect), ratio))
+                r.log("  {:<20} {:<18} {:>8.1f} {:>8.1f} {:>7.2f}  DIM".format(
+                    name, label, drawn, shown, ratio))
+            elif ratio < 0.55:
+                r.log("  {:<20} {:<18} {:>8.1f} {:>8.1f} {:>7.2f}  tight".format(
+                    name, label, drawn, shown, ratio))
+
+    r.check(not dim,
+            "all {} visible buttons pass {:.0%} of their light through the "
+            "bezel ({} too dim)".format(checked, BEZEL_FLOOR, len(dim)))
+    for line in dim[:12]:
+        r.log("         dim: " + line)
+
+
+# ==========================================================================
+# Part 3b: the v2 scenes are cached too, so they must reset on re-entry
+# ==========================================================================
+def run_v2_reuse(h: Harness) -> None:
+    """Enter every scene twice and assert the second visit starts clean."""
+    r = REPORT
+    game = h.game
+    r.head("PART 3b  scene reuse for the v2 screens")
+
+    wipe_save(h)
+    game.save.unlock_through(11)
+
+    def visit_twice(name: str, enter: Callable[[], None], settle: int,
+                    dirty: Callable[[], None]) -> Tuple[Any, Any]:
+        enter()
+        h.step(settle)
+        first = game.scene
+        dirty()
+        h.step(6)
+        game.switch_scene(C.SCENE_MENU)
+        h.step(8)
+        enter()
+        h.step(4)
+        return first, game.scene
+
+    # -- mode select --------------------------------------------------------
+    h.context("reuse: mode select")
+
+    def enter_mode() -> None:
+        game.switch_scene(C.SCENE_MODE)
+
+    def dirty_mode() -> None:
+        h.click_data(("diff", C.DIFF_EXPERT))
+        h.click_button("RESTART STORY")      # arms the two-click confirm
+
+    first, second = visit_twice("mode", enter_mode, 30, dirty_mode)
+    r.check(second is first, "the ModeSelectScene instance is reused")
+    r.check(abs(float(getattr(second, "_t", 1.0))) < 0.2,
+            "mode select clock restarted (_t={:.3f})".format(
+                float(getattr(second, "_t", -1.0))))
+    r.check(abs(float(getattr(second, "_elapsed", 1.0))) < 0.2,
+            "mode select entrance restarted")
+    r.check(not getattr(second, "_launching", False),
+            "mode select is not mid-launch")
+    r.check(float(getattr(second, "_restart_arm", 0.0)) <= 0.0,
+            "the RESTART STORY confirm disarmed (got {})".format(
+                getattr(second, "_restart_arm", None)))
+
+    # -- settings -----------------------------------------------------------
+    h.context("reuse: settings")
+
+    def enter_settings() -> None:
+        game.switch_scene(C.SCENE_SETTINGS, back=C.SCENE_MENU)
+
+    def dirty_settings() -> None:
+        h.click_data("reset")                 # leaves the row in confirm state
+
+    first, second = visit_twice("settings", enter_settings, 20, dirty_settings)
+    r.check(second is first, "the SettingsScene instance is reused")
+    r.check(not getattr(second, "confirming", False),
+            "the RESET confirm state was cleared on re-entry")
+    r.check(find_button_by_data(second, "reset") is not None,
+            "the reset row is back to its one-click face")
+    r.check(getattr(second, "back_target", None) == C.SCENE_MENU,
+            "back_target re-resolved (got {!r})".format(
+                getattr(second, "back_target", None)))
+    # ...and a different back target on the next visit really takes.
+    game.switch_scene(C.SCENE_SETTINGS, back=C.SCENE_LEVELS)
+    h.step(10)
+    r.check(getattr(game.scene, "back_target", None) == C.SCENE_LEVELS,
+            "a second visit with back={!r} re-targets BACK (got {!r})".format(
+                C.SCENE_LEVELS, getattr(game.scene, "back_target", None)))
+    h.click_button("BACK")
+    h.step(12)
+    r.check(scene_is(h, "LevelSelectScene"),
+            "...and BACK really goes there (got {})".format(h.scene_name()))
+
+    # -- story --------------------------------------------------------------
+    h.context("reuse: story")
+    from snake.core import story as S
+
+    def enter_story() -> None:
+        game.switch_scene(C.SCENE_STORY,
+                          cards=[S.get_chapter(0), S.get_beat(0), S.get_beat(1)],
+                          next_scene=C.SCENE_MENU, next_kwargs={})
+
+    enter_story()
+    h.step(40)
+    first = game.scene
+    advance_story(h, limit=2)             # move off card 0
+    moved = int(getattr(game.scene, "index", 0))
+    game.switch_scene(C.SCENE_MENU)
+    h.step(8)
+    game.switch_scene(C.SCENE_STORY, cards=[S.get_beat(2)],
+                      next_scene=C.SCENE_GAME, next_kwargs={"level_index": 2})
+    h.step(6)
+    second = game.scene
+    r.check(second is first, "the StoryScene instance is reused")
+    r.check(moved > 0, "the first visit really advanced ({} cards)".format(moved))
+    r.check(int(getattr(second, "index", -1)) == 0,
+            "the card index reset to 0 (got {})".format(
+                getattr(second, "index", None)))
+    r.check(len(getattr(second, "cards", [])) == 1,
+            "the new deck replaced the old one ({} cards)".format(
+                len(getattr(second, "cards", []))))
+    r.check(getattr(second, "next_scene", None) == C.SCENE_GAME,
+            "the new hand-off replaced the old one (got {!r})".format(
+                getattr(second, "next_scene", None)))
+    r.check(not getattr(second, "done", False),
+            "the finished latch reset")
+
+    # -- level select -------------------------------------------------------
+    h.context("reuse: level select")
+    game.difficulty = C.DIFF_NORMAL
+    game.switch_scene(C.SCENE_LEVELS)
+    h.step(55)
+    first = game.scene
+    h.click_data(C.DIFF_EXPERT)
+    h.step(20)
+    game.switch_scene(C.SCENE_MENU)
+    h.step(8)
+    game.switch_scene(C.SCENE_LEVELS)
+    h.step(6)
+    second = game.scene
+    r.check(second is first, "the LevelSelectScene instance is reused")
+    r.check(abs(float(getattr(second, "elapsed", 1.0))) < 0.2,
+            "level select entrance clock restarted (elapsed={:.3f})".format(
+                float(getattr(second, "elapsed", -1.0))))
+    r.check(all(float(getattr(c, "appear", 1.0)) < 1.0 for c in second.cards),
+            "the tiles replay their entrance rather than starting settled")
+    r.check(0 <= int(getattr(second, "focus", -1)) < len(second.cards),
+            "the focused tile is a real index (got {})".format(
+                getattr(second, "focus", None)))
+    r.check(game.difficulty == C.DIFF_EXPERT,
+            "the difficulty chosen on the header survived the round trip")
+    r.check(all(getattr(c.button, "hovered", False) is False
+                for c in second.cards),
+            "no tile is stuck in its hovered state from the last visit")
+
+    # -- pause --------------------------------------------------------------
+    h.context("reuse: pause")
+    game.switch_scene(C.SCENE_GAME, level_index=0)
+    h.step(6)
+    game.push_scene(C.SCENE_PAUSE)
+    h.step(20)
+    first = game.scene
+    game.pop_scene()
+    h.step(6)
+    game.push_scene(C.SCENE_PAUSE)
+    h.step(3)
+    second = game.scene
+    r.check(second is first, "the PauseScene instance is reused")
+    r.check(float(getattr(second, "intro", 1.0)) < 0.9,
+            "the pause panel re-animates in (intro={:.2f})".format(
+                float(getattr(second, "intro", -1.0))))
+    r.check(not getattr(second, "_closing", True),
+            "the pause overlay is not stuck in its closing state")
+    game.pop_scene()
+    h.step(4)
+
+    # -- result screens ------------------------------------------------------
+    h.context("reuse: victory / gameover")
+    for name, cls in ((C.SCENE_VICTORY, "VictoryScene"),
+                      (C.SCENE_GAMEOVER, "GameOverScene")):
+        game.mode = C.MODE_FREE
+        game.last_result = {
+            "score": 800, "level_index": 2, "level_name": "Emerald Circuit",
+            "food_eaten": 12, "goal_food": 12, "stars": 3, "new_best": True,
+            "won": name == C.SCENE_VICTORY, "elapsed": 30.0, "max_combo": 7,
+            "deaths": 0, "mode": C.MODE_FREE, "story": False,
+            "next_index": 3, "final_level": False,
+        }
+        game.switch_scene(name)
+        h.step(120)
+        first = game.scene
+        shown_first = float(getattr(first, "shown", getattr(first, "t", 0.0)))
+        game.switch_scene(C.SCENE_MENU)
+        h.step(8)
+        game.last_result = dict(game.last_result, score=10, stars=1,
+                                new_best=False, level_index=0,
+                                level_name="Neon Grid")
+        game.switch_scene(name)
+        h.step(4)
+        second = game.scene
+        r.check(second is first, "the {} instance is reused".format(cls))
+        r.check(float(getattr(second, "t", 1.0)) < 0.3,
+                "{} clock restarted (t={:.3f})".format(
+                    cls, float(getattr(second, "t", -1.0))))
+        r.check(int(getattr(second, "level_index", -1)) == 0,
+                "{} re-read the new result (level_index={})".format(
+                    cls, getattr(second, "level_index", None)))
+        r.check(shown_first >= 0.0, "{} ran its first visit".format(cls))
 
 
 # ==========================================================================
@@ -1155,12 +2362,12 @@ def run_registry(h: Harness) -> None:
 
     * every ``C.SCENE_*`` constant has a registry entry (nothing config
       promises can be missing), and
-    * every registry entry either builds the class it claims, or is a declared
-      v2 scene whose module has not been written yet.
+    * every registry entry builds the class it claims.
 
-    The last clause is the only slack, it is enumerated in `PENDING`, and it is
-    reported so it cannot rot silently.  Delete a name from `PENDING` the
-    moment its scene module exists and the check hardens automatically.
+    ``PENDING`` used to hold the v2 scene names whose modules had not been
+    written yet, and it was the only slack in this check.  All ten scenes now
+    exist, so it is **empty** and every entry must build - a scene that fails
+    to import is a hard failure with nowhere left to hide.
     """
     from snake.main import SCENE_REGISTRY
 
@@ -1175,9 +2382,9 @@ def run_registry(h: Harness) -> None:
                 C.SCENE_SETTINGS: "SettingsScene",
                 C.SCENE_STORY: "StoryScene"}
 
-    #: v2 scene names that are registered but whose module is still being
-    #: written.  Empty this list as the scenes land.
-    PENDING = {C.SCENE_MODE, C.SCENE_SETTINGS, C.SCENE_STORY}
+    #: Registered scene names whose module has not landed yet.  Every v2
+    #: scene now exists, so this is empty and the check below is fully hard.
+    PENDING: set = set()
 
     declared = {value for name, value in vars(C).items()
                 if name.startswith("SCENE_") and isinstance(value, str)}
@@ -1209,11 +2416,17 @@ def run_registry(h: Harness) -> None:
                 "{!r:<10} -> {}".format(name, type(scene).__name__))
 
     if pending_seen:
-        r.log("  note: {} registered but not yet implemented - expected, "
-              "these are the next phase's scenes".format(
-                  ", ".join(repr(n) for n in sorted(pending_seen))))
+        r.log("  note: {} registered but not yet implemented".format(
+            ", ".join(repr(n) for n in sorted(pending_seen))))
     r.check(set(pending_seen) <= PENDING,
             "no scene outside the declared pending set failed to build")
+    r.check(not PENDING,
+            "the pending-scene set is empty - all {} scenes must build "
+            "({} declared)".format(len(expected), len(declared)))
+    built = [n for n in expected if n in SCENE_REGISTRY and n not in pending_seen]
+    r.check(len(built) == 10,
+            "all ten scenes resolved from the registry ({} built)".format(
+                len(built)))
 
 
 # ==========================================================================
@@ -1227,6 +2440,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="piloted frames per level in the sweep")
     parser.add_argument("--no-trace", action="store_true",
                         help="disable the swallowed-exception detector")
+    parser.add_argument("--only", default="",
+                        help="comma-separated section names to run "
+                             "(registry, flow, mode, story, free, settings, "
+                             "difficulty, reuse, v2reuse, buttons, v2buttons, "
+                             "legibility, canaries, sweep); default is all")
     args = parser.parse_args(argv)
 
     frames = 120 if args.quick else args.frames
@@ -1246,12 +2464,30 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     started = time.perf_counter()
     try:
-        run_registry(harness)
-        run_flow(harness)
-        run_reuse(harness)
-        run_button_walk(harness)
-        run_detector_canaries(harness, spy)
-        run_level_sweep(harness, frames, timing)
+        sections: List[Tuple[str, Callable[[], None]]] = [
+            ("registry", lambda: run_registry(harness)),
+            ("flow", lambda: run_flow(harness)),
+            ("mode", lambda: run_v2_mode_select(harness)),
+            ("story", lambda: run_v2_story(harness)),
+            ("free", lambda: run_v2_free_play(harness)),
+            ("settings", lambda: run_v2_settings(harness)),
+            ("difficulty", lambda: run_v2_difficulty_play(harness)),
+            ("reuse", lambda: run_reuse(harness)),
+            ("v2reuse", lambda: run_v2_reuse(harness)),
+            ("buttons", lambda: run_button_walk(harness)),
+            ("v2buttons", lambda: run_v2_button_walk(harness)),
+            ("legibility", lambda: run_v2_legibility(harness)),
+            ("canaries", lambda: run_detector_canaries(harness, spy)),
+            ("sweep", lambda: run_level_sweep(harness, frames, timing)),
+        ]
+        wanted = {s.strip() for s in args.only.split(",") if s.strip()}
+        if wanted:
+            unknown = wanted - {name for name, _ in sections}
+            if unknown:
+                parser.error("unknown section(s): " + ", ".join(sorted(unknown)))
+        for name, run in sections:
+            if not wanted or name in wanted:
+                run()
     except Exception:
         if spy is not None:
             spy.stop()

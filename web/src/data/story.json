@@ -1,0 +1,268 @@
+{
+  "_generated": "tools/export_data.py",
+  "_note": "the four-chapter narrative: 12 beats plus prologue/epilogue",
+  "beats": [
+    {
+      "level_index": 0,
+      "chapter": 1,
+      "chapter_title": "Cold Boot",
+      "title": "First Light",
+      "intro": [
+        "You wake on the outer lattice, thin as a wire.",
+        "No walls out here. The edges simply fold into each other.",
+        "Move. Feed. Find out what you are."
+      ],
+      "outro": [
+        "Eight fragments down, and you are longer than you were.",
+        "Somewhere below, a fan spins up to meet you."
+      ],
+      "speaker": "boot log"
+    },
+    {
+      "level_index": 1,
+      "chapter": 1,
+      "chapter_title": "Cold Boot",
+      "title": "Dust and Monoliths",
+      "intro": [
+        "Dead memory drifts here in slabs.",
+        "The monoliths do not move and they do not forgive.",
+        "Thread the corridor between them."
+      ],
+      "outro": [
+        "The dust closes behind you as though it never opened.",
+        "Below the drift, a green pulse is keeping time."
+      ],
+      "speaker": "the lattice"
+    },
+    {
+      "level_index": 2,
+      "chapter": 1,
+      "chapter_title": "Cold Boot",
+      "title": "The Living Board",
+      "intro": [
+        "A board still carrying current, split into four cells.",
+        "The traces are hot. The hub between them is not.",
+        "Ride the hub and take what the circuit is still feeding."
+      ],
+      "outro": [
+        "The circuit stutters, then goes quiet underneath you.",
+        "First layer cleared.",
+        "The machine has noticed that it has a passenger."
+      ],
+      "speaker": "trace log"
+    },
+    {
+      "level_index": 3,
+      "chapter": 2,
+      "chapter_title": "The Working Layers",
+      "title": "Coronal Lanes",
+      "intro": [
+        "The heat sink is running open. Flares sweep the outer lanes.",
+        "There is a cold highway through the middle,",
+        "and nothing worth eating on it.",
+        "Cross behind a flare. Never ahead of one."
+      ],
+      "outro": [
+        "You come out scorched, and heavier for it.",
+        "The floor beneath the sink is wet."
+      ],
+      "speaker": "thermal channel"
+    },
+    {
+      "level_index": 4,
+      "chapter": 2,
+      "chapter_title": "The Working Layers",
+      "title": "Something in the Trench",
+      "intro": [
+        "Coolant, kilometres of it, breathing in columns.",
+        "They rise and fall out of step; one end is always open.",
+        "Whatever else lives down here has not surfaced yet."
+      ],
+      "outro": [
+        "The tide settles. You count the columns.",
+        "One of them is missing.",
+        "Best not to go looking for it."
+      ],
+      "speaker": "coolant loop"
+    },
+    {
+      "level_index": 5,
+      "chapter": 2,
+      "chapter_title": "The Working Layers",
+      "title": "Signal Lost",
+      "intro": [
+        "Carrier gone. Only static, and three things turning inside it.",
+        "Their hubs kill as surely as their arms do.",
+        "Take the wide line. Never cut the corner."
+      ],
+      "outro": [
+        "The static thins into a word you almost recognise.",
+        "It might have been your name."
+      ],
+      "speaker": "carrier"
+    },
+    {
+      "level_index": 6,
+      "chapter": 3,
+      "chapter_title": "The Deep Works",
+      "title": "Sealed, Not Empty",
+      "intro": [
+        "Cold storage. Four gates, all of them open, none of them safe.",
+        "Something patrols the corridors outside the shell.",
+        "What is kept in here was kept for a reason."
+      ],
+      "outro": [
+        "The vault gives up its cargo without a sound.",
+        "The seal was never meant to keep you out.",
+        "It was meant to keep this in."
+      ],
+      "speaker": "vault index"
+    },
+    {
+      "level_index": 7,
+      "chapter": 3,
+      "chapter_title": "The Deep Works",
+      "title": "The Garden Inhales",
+      "intro": [
+        "A lattice of spore pods, breathing in a travelling wave.",
+        "They only bite while they are swollen.",
+        "Go through on the exhale, and keep going."
+      ],
+      "outro": [
+        "The garden holds its breath until you are gone.",
+        "You are long now. Long enough to be your own hazard."
+      ],
+      "speaker": "bloom"
+    },
+    {
+      "level_index": 8,
+      "chapter": 3,
+      "chapter_title": "The Deep Works",
+      "title": "The Machine Wants Feeding",
+      "intro": [
+        "The engine room: half-walls weaving up and down,",
+        "and gates of light hung in every gap.",
+        "Each gap is a door, not a hole. The warning ray is the hinge."
+      ],
+      "outro": [
+        "The engine coughs, catches, and runs a little slower.",
+        "It was burning something to stay alive.",
+        "You are what it was saving the fuel for."
+      ],
+      "speaker": "engine"
+    },
+    {
+      "level_index": 9,
+      "chapter": 4,
+      "chapter_title": "The Last Light",
+      "title": "Ribbons Over a Quiet Sea",
+      "intro": [
+        "Open sky, for the first time since you woke.",
+        "Ribbons of discharge, and four gates that will not hurt you.",
+        "Learn the gates here. Further down they are the only road."
+      ],
+      "outro": [
+        "You could stay in the quiet. You do not.",
+        "Out past the ribbons, the horizon is bending."
+      ],
+      "speaker": "drift"
+    },
+    {
+      "level_index": 10,
+      "chapter": 4,
+      "chapter_title": "The Last Light",
+      "title": "The Last Light Bends Inward",
+      "intro": [
+        "The gauntlet steps corner to corner and skips your plaza.",
+        "Everything lethal lives in the two wedges either side of it.",
+        "The portals are the only fast way across. Take them or be caught."
+      ],
+      "outro": [
+        "Light falls in behind you and does not come back out.",
+        "One layer left.",
+        "It has been waiting the whole time."
+      ],
+      "speaker": "horizon"
+    },
+    {
+      "level_index": 11,
+      "chapter": 4,
+      "chapter_title": "The Last Light",
+      "title": "Everything, Refracted",
+      "intro": [
+        "The core. Every hazard the machine still owns, all at once,",
+        "arranged with terrible politeness.",
+        "A cage of four beams, and only one face burns at a time.",
+        "Enter on the dark face. Leave by the next."
+      ],
+      "outro": [
+        "The cage opens. The core is small, and cold, and yours.",
+        "The machine stops dying.",
+        "It simply stops."
+      ],
+      "speaker": "core"
+    }
+  ],
+  "chapters": [
+    {
+      "number": 1,
+      "title": "Cold Boot",
+      "blurb": [
+        "The outer lattice, half powered and mostly empty.",
+        "Nothing here wants you dead yet."
+      ],
+      "first_index": 0,
+      "last_index": 2
+    },
+    {
+      "number": 2,
+      "title": "The Working Layers",
+      "blurb": [
+        "Down where the machine still runs hot.",
+        "Everything moves on a schedule, and none of it is yours."
+      ],
+      "first_index": 3,
+      "last_index": 5
+    },
+    {
+      "number": 3,
+      "title": "The Deep Works",
+      "blurb": [
+        "Storage, growth and combustion.",
+        "The parts of itself the machine locked away, and why."
+      ],
+      "first_index": 6,
+      "last_index": 8
+    },
+    {
+      "number": 4,
+      "title": "The Last Light",
+      "blurb": [
+        "Out to the quiet edge, then inward, past the bend in the light,",
+        "to the thing that dreamed all of this."
+      ],
+      "first_index": 9,
+      "last_index": 11
+    }
+  ],
+  "prologue": {
+    "title": "Cold Start",
+    "lines": [
+      "The machine has been dying for a very long time.",
+      "Deep in what is left of its memory, something moves.",
+      "You are the last process still running.",
+      "Eat, or be swept with the rest."
+    ],
+    "speaker": "boot log"
+  },
+  "epilogue": {
+    "title": "After",
+    "lines": [
+      "You are the machine now. Every corridor, every gate, every dead lane.",
+      "There is nothing left in here to eat.",
+      "Somewhere far off, a colder lattice comes up dark",
+      "and waits for its own first light."
+    ],
+    "speaker": ""
+  }
+}

@@ -43,6 +43,21 @@ savegame.json
 screenshots/
 captures/
 
+# --- Node / web build ---
+node_modules/
+web/dist/
+web/dist-electron/
+web/.vite/
+web/ios/App/Pods/
+web/ios/App/build/
+web/android/.gradle/
+web/android/build/
+web/android/app/build/
+web/android/local.properties
+npm-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
 # --- Editors / IDEs ---
 .vscode/
 .idea/

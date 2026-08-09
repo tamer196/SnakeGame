@@ -1,0 +1,1394 @@
+{
+  "_generated": "tools/export_data.py",
+  "_note": "the 12 hand-tuned level layouts, goals and obstacle specs",
+  "levels": [
+    {
+      "index": 0,
+      "name": "Neon Grid",
+      "subtitle": "First light on the lattice",
+      "themeIndex": 0,
+      "goalFood": 8,
+      "speedMult": 1.0,
+      "foodCount": 3,
+      "obstacleSpec": [],
+      "powerupsEnabled": false,
+      "wrapWalls": true,
+      "hint": "Move the mouse to steer, hold right-click to boost. The edges wrap.",
+      "cruiseSpeed": 210.0,
+      "baseSpeed": 210.0,
+      "parScore": 80,
+      "starTargets": [
+        80,
+        108,
+        140
+      ],
+      "number": 1,
+      "difficultyRating": 0.0
+    },
+    {
+      "index": 1,
+      "name": "Deep Nebula",
+      "subtitle": "Monoliths adrift in the dust",
+      "themeIndex": 1,
+      "goalFood": 10,
+      "speedMult": 1.05,
+      "foodCount": 3,
+      "obstacleSpec": [
+        {
+          "type": "wall",
+          "x": 0.255,
+          "y": 0.325,
+          "w": 0.022,
+          "h": 0.345
+        },
+        {
+          "type": "wall",
+          "x": 0.723,
+          "y": 0.325,
+          "w": 0.022,
+          "h": 0.345
+        },
+        {
+          "type": "wall",
+          "x": 0.455,
+          "y": 0.085,
+          "w": 0.028,
+          "h": 0.075
+        },
+        {
+          "type": "wall",
+          "x": 0.517,
+          "y": 0.845,
+          "w": 0.028,
+          "h": 0.075
+        }
+      ],
+      "powerupsEnabled": true,
+      "wrapWalls": true,
+      "hint": "Solid walls: clip one and it costs you a life.",
+      "cruiseSpeed": 219.0,
+      "baseSpeed": 229.95000000000002,
+      "parScore": 100,
+      "starTargets": [
+        100,
+        135,
+        175
+      ],
+      "number": 2,
+      "difficultyRating": 0.09090909090909091
+    },
+    {
+      "index": 2,
+      "name": "Emerald Circuit",
+      "subtitle": "Trace the living board",
+      "themeIndex": 2,
+      "goalFood": 12,
+      "speedMult": 1.11,
+      "foodCount": 4,
+      "obstacleSpec": [
+        {
+          "type": "wall",
+          "x": 0.1,
+          "y": 0.48,
+          "w": 0.26,
+          "h": 0.034
+        },
+        {
+          "type": "wall",
+          "x": 0.64,
+          "y": 0.48,
+          "w": 0.26,
+          "h": 0.034
+        },
+        {
+          "type": "wall",
+          "x": 0.492,
+          "y": 0.145,
+          "w": 0.016,
+          "h": 0.195
+        },
+        {
+          "type": "wall",
+          "x": 0.492,
+          "y": 0.66,
+          "w": 0.016,
+          "h": 0.195
+        },
+        {
+          "type": "wall",
+          "x": 0.19,
+          "y": 0.215,
+          "w": 0.034,
+          "h": 0.068
+        },
+        {
+          "type": "wall",
+          "x": 0.752,
+          "y": 0.215,
+          "w": 0.034,
+          "h": 0.068
+        },
+        {
+          "type": "wall",
+          "x": 0.19,
+          "y": 0.7,
+          "w": 0.034,
+          "h": 0.068
+        },
+        {
+          "type": "wall",
+          "x": 0.752,
+          "y": 0.7,
+          "w": 0.034,
+          "h": 0.068
+        }
+      ],
+      "powerupsEnabled": true,
+      "wrapWalls": true,
+      "hint": "The circuit cross splits the field into four cells. Use the hub.",
+      "cruiseSpeed": 228.0,
+      "baseSpeed": 253.08,
+      "parScore": 120,
+      "starTargets": [
+        120,
+        162,
+        210
+      ],
+      "number": 3,
+      "difficultyRating": 0.18181818181818182
+    },
+    {
+      "index": 3,
+      "name": "Solar Flare",
+      "subtitle": "Coronal lanes, timed to burn",
+      "themeIndex": 3,
+      "goalFood": 14,
+      "speedMult": 1.17,
+      "foodCount": 4,
+      "obstacleSpec": [
+        {
+          "type": "movingbar",
+          "x": 0.04,
+          "y": 0.12,
+          "w": 0.22,
+          "h": 0.034,
+          "axis": "x",
+          "travel": 0.62,
+          "speed": 0.17,
+          "phase": 0.0
+        },
+        {
+          "type": "movingbar",
+          "x": 0.1,
+          "y": 0.345,
+          "w": 0.24,
+          "h": 0.034,
+          "axis": "x",
+          "travel": 0.58,
+          "speed": 0.14,
+          "phase": 0.5
+        },
+        {
+          "type": "movingbar",
+          "x": 0.14,
+          "y": 0.645,
+          "w": 0.24,
+          "h": 0.034,
+          "axis": "x",
+          "travel": 0.58,
+          "speed": 0.15,
+          "phase": 0.25
+        },
+        {
+          "type": "movingbar",
+          "x": 0.06,
+          "y": 0.84,
+          "w": 0.22,
+          "h": 0.034,
+          "axis": "x",
+          "travel": 0.62,
+          "speed": 0.18,
+          "phase": 0.7
+        },
+        {
+          "type": "wall",
+          "x": 0.155,
+          "y": 0.455,
+          "w": 0.026,
+          "h": 0.1
+        },
+        {
+          "type": "wall",
+          "x": 0.81,
+          "y": 0.455,
+          "w": 0.026,
+          "h": 0.1
+        }
+      ],
+      "powerupsEnabled": true,
+      "wrapWalls": false,
+      "hint": "Flare bars sweep the outer lanes. Cross behind them, never ahead.",
+      "cruiseSpeed": 237.0,
+      "baseSpeed": 277.28999999999996,
+      "parScore": 140,
+      "starTargets": [
+        140,
+        189,
+        245
+      ],
+      "number": 4,
+      "difficultyRating": 0.2727272727272727
+    },
+    {
+      "index": 4,
+      "name": "Abyssal Tide",
+      "subtitle": "Something moves in the trench",
+      "themeIndex": 4,
+      "goalFood": 16,
+      "speedMult": 1.23,
+      "foodCount": 4,
+      "obstacleSpec": [
+        {
+          "type": "movingbar",
+          "x": 0.14,
+          "y": 0.05,
+          "w": 0.026,
+          "h": 0.28,
+          "axis": "y",
+          "travel": 0.52,
+          "speed": 0.13,
+          "phase": 0.0
+        },
+        {
+          "type": "movingbar",
+          "x": 0.3,
+          "y": 0.05,
+          "w": 0.026,
+          "h": 0.28,
+          "axis": "y",
+          "travel": 0.52,
+          "speed": 0.115,
+          "phase": 0.5
+        },
+        {
+          "type": "movingbar",
+          "x": 0.66,
+          "y": 0.05,
+          "w": 0.026,
+          "h": 0.28,
+          "axis": "y",
+          "travel": 0.52,
+          "speed": 0.125,
+          "phase": 0.5
+        },
+        {
+          "type": "movingbar",
+          "x": 0.82,
+          "y": 0.05,
+          "w": 0.026,
+          "h": 0.28,
+          "axis": "y",
+          "travel": 0.52,
+          "speed": 0.105,
+          "phase": 0.0
+        },
+        {
+          "type": "wall",
+          "x": 0.44,
+          "y": 0.095,
+          "w": 0.12,
+          "h": 0.03
+        },
+        {
+          "type": "wall",
+          "x": 0.44,
+          "y": 0.865,
+          "w": 0.12,
+          "h": 0.03
+        }
+      ],
+      "powerupsEnabled": true,
+      "wrapWalls": false,
+      "hint": "Tidal columns rise and fall. Slip past on whichever end is open.",
+      "cruiseSpeed": 246.0,
+      "baseSpeed": 302.58,
+      "parScore": 160,
+      "starTargets": [
+        160,
+        216,
+        280
+      ],
+      "number": 5,
+      "difficultyRating": 0.36363636363636365
+    },
+    {
+      "index": 5,
+      "name": "Violet Static",
+      "subtitle": "Signal lost, teeth found",
+      "themeIndex": 5,
+      "goalFood": 18,
+      "speedMult": 1.29,
+      "foodCount": 5,
+      "obstacleSpec": [
+        {
+          "type": "spinner",
+          "cx": 0.24,
+          "cy": 0.3,
+          "length": 82.0,
+          "arms": 2,
+          "speed": 1.45,
+          "thickness": 11.0,
+          "phase": 0.0,
+          "hub_radius": 13.0
+        },
+        {
+          "type": "spinner",
+          "cx": 0.76,
+          "cy": 0.3,
+          "length": 82.0,
+          "arms": 2,
+          "speed": -1.35,
+          "thickness": 11.0,
+          "phase": 1.1,
+          "hub_radius": 13.0
+        },
+        {
+          "type": "spinner",
+          "cx": 0.5,
+          "cy": 0.8,
+          "length": 88.0,
+          "arms": 3,
+          "speed": 1.15,
+          "thickness": 11.0,
+          "phase": 0.5,
+          "hub_radius": 13.0
+        },
+        {
+          "type": "wall",
+          "x": 0.03,
+          "y": 0.05,
+          "w": 0.085,
+          "h": 0.05
+        },
+        {
+          "type": "wall",
+          "x": 0.885,
+          "y": 0.05,
+          "w": 0.085,
+          "h": 0.05
+        },
+        {
+          "type": "wall",
+          "x": 0.03,
+          "y": 0.9,
+          "w": 0.085,
+          "h": 0.05
+        },
+        {
+          "type": "wall",
+          "x": 0.885,
+          "y": 0.9,
+          "w": 0.085,
+          "h": 0.05
+        }
+      ],
+      "powerupsEnabled": true,
+      "wrapWalls": true,
+      "hint": "Spinners: the hub kills too, so never cut a corner tight.",
+      "cruiseSpeed": 255.0,
+      "baseSpeed": 328.95,
+      "parScore": 180,
+      "starTargets": [
+        180,
+        243,
+        315
+      ],
+      "number": 6,
+      "difficultyRating": 0.45454545454545453
+    },
+    {
+      "index": 6,
+      "name": "Frozen Vault",
+      "subtitle": "Sealed, but not empty",
+      "themeIndex": 6,
+      "goalFood": 20,
+      "speedMult": 1.35,
+      "foodCount": 5,
+      "obstacleSpec": [
+        {
+          "type": "wall",
+          "x": 0.24,
+          "y": 0.2,
+          "w": 0.17,
+          "h": 0.036
+        },
+        {
+          "type": "wall",
+          "x": 0.59,
+          "y": 0.2,
+          "w": 0.17,
+          "h": 0.036
+        },
+        {
+          "type": "wall",
+          "x": 0.24,
+          "y": 0.764,
+          "w": 0.17,
+          "h": 0.036
+        },
+        {
+          "type": "wall",
+          "x": 0.59,
+          "y": 0.764,
+          "w": 0.17,
+          "h": 0.036
+        },
+        {
+          "type": "wall",
+          "x": 0.24,
+          "y": 0.2,
+          "w": 0.018,
+          "h": 0.19
+        },
+        {
+          "type": "wall",
+          "x": 0.24,
+          "y": 0.61,
+          "w": 0.018,
+          "h": 0.19
+        },
+        {
+          "type": "wall",
+          "x": 0.742,
+          "y": 0.2,
+          "w": 0.018,
+          "h": 0.19
+        },
+        {
+          "type": "wall",
+          "x": 0.742,
+          "y": 0.61,
+          "w": 0.018,
+          "h": 0.19
+        },
+        {
+          "type": "wall",
+          "x": 0.4,
+          "y": 0.315,
+          "w": 0.2,
+          "h": 0.03
+        },
+        {
+          "type": "wall",
+          "x": 0.4,
+          "y": 0.645,
+          "w": 0.2,
+          "h": 0.03
+        },
+        {
+          "type": "spinner",
+          "cx": 0.115,
+          "cy": 0.215,
+          "length": 62.0,
+          "arms": 2,
+          "speed": 1.3,
+          "thickness": 12.0,
+          "phase": 0.0,
+          "hub_radius": 13.0
+        },
+        {
+          "type": "spinner",
+          "cx": 0.885,
+          "cy": 0.215,
+          "length": 62.0,
+          "arms": 2,
+          "speed": -1.3,
+          "thickness": 12.0,
+          "phase": 0.8,
+          "hub_radius": 13.0
+        },
+        {
+          "type": "spinner",
+          "cx": 0.115,
+          "cy": 0.785,
+          "length": 62.0,
+          "arms": 2,
+          "speed": -1.45,
+          "thickness": 12.0,
+          "phase": 1.6,
+          "hub_radius": 13.0
+        },
+        {
+          "type": "spinner",
+          "cx": 0.885,
+          "cy": 0.785,
+          "length": 62.0,
+          "arms": 2,
+          "speed": 1.45,
+          "thickness": 12.0,
+          "phase": 2.4,
+          "hub_radius": 13.0
+        }
+      ],
+      "powerupsEnabled": true,
+      "wrapWalls": false,
+      "hint": "Four gates into the vault, and spinners patrolling every approach.",
+      "cruiseSpeed": 264.0,
+      "baseSpeed": 356.40000000000003,
+      "parScore": 200,
+      "starTargets": [
+        200,
+        270,
+        350
+      ],
+      "number": 7,
+      "difficultyRating": 0.5454545454545454
+    },
+    {
+      "index": 7,
+      "name": "Toxic Bloom",
+      "subtitle": "The garden inhales",
+      "themeIndex": 7,
+      "goalFood": 22,
+      "speedMult": 1.41,
+      "foodCount": 5,
+      "obstacleSpec": [
+        {
+          "type": "pulsar",
+          "cx": 0.12,
+          "cy": 0.18,
+          "min_radius": 13.0,
+          "max_radius": 53.0,
+          "period": 2.3,
+          "phase": 0.0,
+          "deadly_frac": 0.55
+        },
+        {
+          "type": "pulsar",
+          "cx": 0.12,
+          "cy": 0.5,
+          "min_radius": 13.0,
+          "max_radius": 53.0,
+          "period": 2.48,
+          "phase": 0.6,
+          "deadly_frac": 0.55
+        },
+        {
+          "type": "pulsar",
+          "cx": 0.12,
+          "cy": 0.82,
+          "min_radius": 13.0,
+          "max_radius": 53.0,
+          "period": 2.6599999999999997,
+          "phase": 0.2,
+          "deadly_frac": 0.55
+        },
+        {
+          "type": "pulsar",
+          "cx": 0.31,
+          "cy": 0.18,
+          "min_radius": 13.0,
+          "max_radius": 53.0,
+          "period": 2.48,
+          "phase": 0.4,
+          "deadly_frac": 0.55
+        },
+        {
+          "type": "pulsar",
+          "cx": 0.31,
+          "cy": 0.5,
+          "min_radius": 13.0,
+          "max_radius": 53.0,
+          "period": 2.6599999999999997,
+          "phase": 0.0,
+          "deadly_frac": 0.55
+        },
+        {
+          "type": "pulsar",
+          "cx": 0.31,
+          "cy": 0.82,
+          "min_radius": 13.0,
+          "max_radius": 53.0,
+          "period": 2.84,
+          "phase": 0.6,
+          "deadly_frac": 0.55
+        },
+        {
+          "type": "pulsar",
+          "cx": 0.5,
+          "cy": 0.18,
+          "min_radius": 13.0,
+          "max_radius": 53.0,
+          "period": 2.6599999999999997,
+          "phase": 0.8,
+          "deadly_frac": 0.55
+        },
+        {
+          "type": "pulsar",
+          "cx": 0.5,
+          "cy": 0.82,
+          "min_radius": 13.0,
+          "max_radius": 53.0,
+          "period": 2.3,
+          "phase": 0.0,
+          "deadly_frac": 0.55
+        },
+        {
+          "type": "pulsar",
+          "cx": 0.69,
+          "cy": 0.18,
+          "min_radius": 13.0,
+          "max_radius": 53.0,
+          "period": 2.84,
+          "phase": 0.2,
+          "deadly_frac": 0.55
+        },
+        {
+          "type": "pulsar",
+          "cx": 0.69,
+          "cy": 0.5,
+          "min_radius": 13.0,
+          "max_radius": 53.0,
+          "period": 2.3,
+          "phase": 0.8,
+          "deadly_frac": 0.55
+        },
+        {
+          "type": "pulsar",
+          "cx": 0.69,
+          "cy": 0.82,
+          "min_radius": 13.0,
+          "max_radius": 53.0,
+          "period": 2.48,
+          "phase": 0.4,
+          "deadly_frac": 0.55
+        },
+        {
+          "type": "pulsar",
+          "cx": 0.88,
+          "cy": 0.18,
+          "min_radius": 13.0,
+          "max_radius": 53.0,
+          "period": 2.3,
+          "phase": 0.6,
+          "deadly_frac": 0.55
+        },
+        {
+          "type": "pulsar",
+          "cx": 0.88,
+          "cy": 0.5,
+          "min_radius": 13.0,
+          "max_radius": 53.0,
+          "period": 2.48,
+          "phase": 0.2,
+          "deadly_frac": 0.55
+        },
+        {
+          "type": "pulsar",
+          "cx": 0.88,
+          "cy": 0.82,
+          "min_radius": 13.0,
+          "max_radius": 53.0,
+          "period": 2.6599999999999997,
+          "phase": 0.8,
+          "deadly_frac": 0.55
+        },
+        {
+          "type": "wall",
+          "x": 0.0,
+          "y": 0.0,
+          "w": 0.055,
+          "h": 0.07
+        },
+        {
+          "type": "wall",
+          "x": 0.945,
+          "y": 0.0,
+          "w": 0.055,
+          "h": 0.07
+        },
+        {
+          "type": "wall",
+          "x": 0.0,
+          "y": 0.93,
+          "w": 0.055,
+          "h": 0.07
+        },
+        {
+          "type": "wall",
+          "x": 0.945,
+          "y": 0.93,
+          "w": 0.055,
+          "h": 0.07
+        }
+      ],
+      "powerupsEnabled": true,
+      "wrapWalls": false,
+      "hint": "Pulsars only bite while swollen. Move through them on the exhale.",
+      "cruiseSpeed": 273.0,
+      "baseSpeed": 384.92999999999995,
+      "parScore": 220,
+      "starTargets": [
+        220,
+        297,
+        385
+      ],
+      "number": 8,
+      "difficultyRating": 0.6363636363636364
+    },
+    {
+      "index": 8,
+      "name": "Crimson Engine",
+      "subtitle": "The machine wants feeding",
+      "themeIndex": 8,
+      "goalFood": 24,
+      "speedMult": 1.47,
+      "foodCount": 5,
+      "obstacleSpec": [
+        {
+          "type": "wall",
+          "x": 0.19,
+          "y": 0.0,
+          "w": 0.016,
+          "h": 0.6
+        },
+        {
+          "type": "wall",
+          "x": 0.38,
+          "y": 0.4,
+          "w": 0.016,
+          "h": 0.6
+        },
+        {
+          "type": "wall",
+          "x": 0.62,
+          "y": 0.0,
+          "w": 0.016,
+          "h": 0.6
+        },
+        {
+          "type": "wall",
+          "x": 0.81,
+          "y": 0.4,
+          "w": 0.016,
+          "h": 0.6
+        },
+        {
+          "type": "lasergate",
+          "x1": 0.196,
+          "y1": 0.6,
+          "x2": 0.196,
+          "y2": 1.0,
+          "period": 3.2,
+          "fire_time": 0.95,
+          "warn_time": 0.85,
+          "phase": 0.0,
+          "width": 9.0
+        },
+        {
+          "type": "lasergate",
+          "x1": 0.386,
+          "y1": 0.0,
+          "x2": 0.386,
+          "y2": 0.4,
+          "period": 3.2,
+          "fire_time": 0.95,
+          "warn_time": 0.85,
+          "phase": 0.5,
+          "width": 9.0
+        },
+        {
+          "type": "lasergate",
+          "x1": 0.626,
+          "y1": 0.6,
+          "x2": 0.626,
+          "y2": 1.0,
+          "period": 2.8,
+          "fire_time": 0.85,
+          "warn_time": 0.75,
+          "phase": 0.25,
+          "width": 9.0
+        },
+        {
+          "type": "lasergate",
+          "x1": 0.816,
+          "y1": 0.0,
+          "x2": 0.816,
+          "y2": 0.4,
+          "period": 2.8,
+          "fire_time": 0.85,
+          "warn_time": 0.75,
+          "phase": 0.75,
+          "width": 9.0
+        },
+        {
+          "type": "movingbar",
+          "x": 0.075,
+          "y": 0.06,
+          "w": 0.02,
+          "h": 0.25,
+          "axis": "y",
+          "travel": 0.56,
+          "speed": 0.16,
+          "phase": 0.0
+        },
+        {
+          "type": "movingbar",
+          "x": 0.885,
+          "y": 0.06,
+          "w": 0.02,
+          "h": 0.25,
+          "axis": "y",
+          "travel": 0.56,
+          "speed": 0.14,
+          "phase": 0.5
+        }
+      ],
+      "powerupsEnabled": true,
+      "wrapWalls": false,
+      "hint": "Laser gates shut the corridors. The warning ray is your cue.",
+      "cruiseSpeed": 282.0,
+      "baseSpeed": 414.54,
+      "parScore": 240,
+      "starTargets": [
+        240,
+        324,
+        420
+      ],
+      "number": 9,
+      "difficultyRating": 0.7272727272727273
+    },
+    {
+      "index": 9,
+      "name": "Aurora Drift",
+      "subtitle": "Ribbons over a quiet sea",
+      "themeIndex": 9,
+      "goalFood": 26,
+      "speedMult": 1.53,
+      "foodCount": 6,
+      "obstacleSpec": [
+        {
+          "type": "portal",
+          "x": 0.1,
+          "y": 0.22,
+          "radius": 27.0,
+          "pair": "a"
+        },
+        {
+          "type": "portal",
+          "x": 0.9,
+          "y": 0.78,
+          "radius": 27.0,
+          "pair": "a"
+        },
+        {
+          "type": "portal",
+          "x": 0.9,
+          "y": 0.22,
+          "radius": 27.0,
+          "pair": "b"
+        },
+        {
+          "type": "portal",
+          "x": 0.1,
+          "y": 0.78,
+          "radius": 27.0,
+          "pair": "b"
+        },
+        {
+          "type": "movingbar",
+          "x": 0.2,
+          "y": 0.3,
+          "w": 0.18,
+          "h": 0.03,
+          "axis": "x",
+          "travel": 0.42,
+          "speed": 0.11,
+          "phase": 0.0
+        },
+        {
+          "type": "movingbar",
+          "x": 0.4,
+          "y": 0.67,
+          "w": 0.18,
+          "h": 0.03,
+          "axis": "x",
+          "travel": 0.42,
+          "speed": 0.09,
+          "phase": 0.5
+        },
+        {
+          "type": "spinner",
+          "cx": 0.3,
+          "cy": 0.5,
+          "length": 58.0,
+          "arms": 2,
+          "speed": 1.25,
+          "thickness": 11.0,
+          "phase": 0.0,
+          "hub_radius": 13.0
+        },
+        {
+          "type": "spinner",
+          "cx": 0.7,
+          "cy": 0.5,
+          "length": 58.0,
+          "arms": 2,
+          "speed": -1.25,
+          "thickness": 11.0,
+          "phase": 1.2,
+          "hub_radius": 13.0
+        },
+        {
+          "type": "wall",
+          "x": 0.3,
+          "y": 0.11,
+          "w": 0.052,
+          "h": 0.036
+        },
+        {
+          "type": "wall",
+          "x": 0.618,
+          "y": 0.185,
+          "w": 0.052,
+          "h": 0.036
+        },
+        {
+          "type": "wall",
+          "x": 0.338,
+          "y": 0.795,
+          "w": 0.052,
+          "h": 0.036
+        },
+        {
+          "type": "wall",
+          "x": 0.656,
+          "y": 0.87,
+          "w": 0.052,
+          "h": 0.036
+        }
+      ],
+      "powerupsEnabled": true,
+      "wrapWalls": true,
+      "hint": "Portals are safe: enter one and you leave its twin still moving.",
+      "cruiseSpeed": 291.0,
+      "baseSpeed": 445.23,
+      "parScore": 260,
+      "starTargets": [
+        260,
+        351,
+        455
+      ],
+      "number": 10,
+      "difficultyRating": 0.8181818181818182
+    },
+    {
+      "index": 10,
+      "name": "Event Horizon",
+      "subtitle": "The last light bends inward",
+      "themeIndex": 10,
+      "goalFood": 28,
+      "speedMult": 1.61,
+      "foodCount": 6,
+      "obstacleSpec": [
+        {
+          "type": "wall",
+          "x": 0.06,
+          "y": 0.84,
+          "w": 0.07,
+          "h": 0.048
+        },
+        {
+          "type": "wall",
+          "x": 0.195,
+          "y": 0.715,
+          "w": 0.07,
+          "h": 0.048
+        },
+        {
+          "type": "wall",
+          "x": 0.33,
+          "y": 0.59,
+          "w": 0.07,
+          "h": 0.048
+        },
+        {
+          "type": "wall",
+          "x": 0.6,
+          "y": 0.34,
+          "w": 0.07,
+          "h": 0.048
+        },
+        {
+          "type": "wall",
+          "x": 0.735,
+          "y": 0.215,
+          "w": 0.07,
+          "h": 0.048
+        },
+        {
+          "type": "wall",
+          "x": 0.87,
+          "y": 0.09,
+          "w": 0.07,
+          "h": 0.048
+        },
+        {
+          "type": "spinner",
+          "cx": 0.22,
+          "cy": 0.26,
+          "length": 69.0,
+          "arms": 3,
+          "speed": 1.3,
+          "thickness": 11.0,
+          "phase": 0.0,
+          "hub_radius": 13.0
+        },
+        {
+          "type": "spinner",
+          "cx": 0.78,
+          "cy": 0.74,
+          "length": 69.0,
+          "arms": 3,
+          "speed": -1.3,
+          "thickness": 11.0,
+          "phase": 1.0,
+          "hub_radius": 13.0
+        },
+        {
+          "type": "pulsar",
+          "cx": 0.14,
+          "cy": 0.42,
+          "min_radius": 13.0,
+          "max_radius": 50.0,
+          "period": 2.6,
+          "phase": 0.0,
+          "deadly_frac": 0.55
+        },
+        {
+          "type": "pulsar",
+          "cx": 0.42,
+          "cy": 0.16,
+          "min_radius": 13.0,
+          "max_radius": 50.0,
+          "period": 2.9,
+          "phase": 0.35,
+          "deadly_frac": 0.55
+        },
+        {
+          "type": "pulsar",
+          "cx": 0.58,
+          "cy": 0.84,
+          "min_radius": 13.0,
+          "max_radius": 50.0,
+          "period": 2.9,
+          "phase": 0.65,
+          "deadly_frac": 0.55
+        },
+        {
+          "type": "pulsar",
+          "cx": 0.86,
+          "cy": 0.58,
+          "min_radius": 13.0,
+          "max_radius": 50.0,
+          "period": 2.6,
+          "phase": 0.2,
+          "deadly_frac": 0.55
+        },
+        {
+          "type": "portal",
+          "x": 0.045,
+          "y": 0.5,
+          "radius": 26.0,
+          "pair": "x"
+        },
+        {
+          "type": "portal",
+          "x": 0.955,
+          "y": 0.5,
+          "radius": 26.0,
+          "pair": "x"
+        },
+        {
+          "type": "portal",
+          "x": 0.5,
+          "y": 0.07,
+          "radius": 26.0,
+          "pair": "y"
+        },
+        {
+          "type": "portal",
+          "x": 0.5,
+          "y": 0.93,
+          "radius": 26.0,
+          "pair": "y"
+        },
+        {
+          "type": "lasergate",
+          "x1": 0.335,
+          "y1": 0.06,
+          "x2": 0.335,
+          "y2": 0.34,
+          "period": 3.0,
+          "fire_time": 0.8,
+          "warn_time": 0.7,
+          "phase": 0.0,
+          "width": 9.0
+        },
+        {
+          "type": "lasergate",
+          "x1": 0.665,
+          "y1": 0.66,
+          "x2": 0.665,
+          "y2": 0.94,
+          "period": 3.0,
+          "fire_time": 0.8,
+          "warn_time": 0.7,
+          "phase": 0.5,
+          "width": 9.0
+        }
+      ],
+      "powerupsEnabled": true,
+      "wrapWalls": true,
+      "hint": "A diagonal gauntlet. Portals are the only shortcut across it.",
+      "cruiseSpeed": 300.0,
+      "baseSpeed": 483.00000000000006,
+      "parScore": 280,
+      "starTargets": [
+        280,
+        378,
+        490
+      ],
+      "number": 11,
+      "difficultyRating": 0.9090909090909091
+    },
+    {
+      "index": 11,
+      "name": "Prism Core",
+      "subtitle": "Everything, refracted",
+      "themeIndex": 11,
+      "goalFood": 30,
+      "speedMult": 1.7,
+      "foodCount": 6,
+      "obstacleSpec": [
+        {
+          "type": "wall",
+          "x": 0.32,
+          "y": 0.16,
+          "w": 0.36,
+          "h": 0.032
+        },
+        {
+          "type": "wall",
+          "x": 0.32,
+          "y": 0.808,
+          "w": 0.36,
+          "h": 0.032
+        },
+        {
+          "type": "wall",
+          "x": 0.175,
+          "y": 0.4,
+          "w": 0.018,
+          "h": 0.2
+        },
+        {
+          "type": "wall",
+          "x": 0.807,
+          "y": 0.4,
+          "w": 0.018,
+          "h": 0.2
+        },
+        {
+          "type": "wall",
+          "x": 0.44,
+          "y": 0.325,
+          "w": 0.12,
+          "h": 0.028
+        },
+        {
+          "type": "wall",
+          "x": 0.44,
+          "y": 0.65,
+          "w": 0.12,
+          "h": 0.028
+        },
+        {
+          "type": "spinner",
+          "cx": 0.16,
+          "cy": 0.18,
+          "length": 63.0,
+          "arms": 3,
+          "speed": 1.4,
+          "thickness": 11.0,
+          "phase": 0.0,
+          "hub_radius": 13.0
+        },
+        {
+          "type": "spinner",
+          "cx": 0.84,
+          "cy": 0.18,
+          "length": 63.0,
+          "arms": 3,
+          "speed": -1.4,
+          "thickness": 11.0,
+          "phase": 0.7,
+          "hub_radius": 13.0
+        },
+        {
+          "type": "spinner",
+          "cx": 0.16,
+          "cy": 0.82,
+          "length": 63.0,
+          "arms": 3,
+          "speed": -1.55,
+          "thickness": 11.0,
+          "phase": 1.4,
+          "hub_radius": 13.0
+        },
+        {
+          "type": "spinner",
+          "cx": 0.84,
+          "cy": 0.82,
+          "length": 63.0,
+          "arms": 3,
+          "speed": 1.55,
+          "thickness": 11.0,
+          "phase": 2.1,
+          "hub_radius": 13.0
+        },
+        {
+          "type": "pulsar",
+          "cx": 0.3,
+          "cy": 0.5,
+          "min_radius": 13.0,
+          "max_radius": 54.0,
+          "period": 2.4,
+          "phase": 0.0,
+          "deadly_frac": 0.55
+        },
+        {
+          "type": "pulsar",
+          "cx": 0.7,
+          "cy": 0.5,
+          "min_radius": 13.0,
+          "max_radius": 54.0,
+          "period": 2.4,
+          "phase": 0.5,
+          "deadly_frac": 0.55
+        },
+        {
+          "type": "movingbar",
+          "x": 0.32,
+          "y": 0.045,
+          "w": 0.16,
+          "h": 0.03,
+          "axis": "x",
+          "travel": 0.28,
+          "speed": 0.16,
+          "phase": 0.0
+        },
+        {
+          "type": "movingbar",
+          "x": 0.32,
+          "y": 0.905,
+          "w": 0.16,
+          "h": 0.03,
+          "axis": "x",
+          "travel": 0.28,
+          "speed": 0.14,
+          "phase": 0.5
+        },
+        {
+          "type": "portal",
+          "x": 0.035,
+          "y": 0.07,
+          "radius": 24.0,
+          "pair": "a"
+        },
+        {
+          "type": "portal",
+          "x": 0.965,
+          "y": 0.93,
+          "radius": 24.0,
+          "pair": "a"
+        },
+        {
+          "type": "portal",
+          "x": 0.965,
+          "y": 0.07,
+          "radius": 24.0,
+          "pair": "b"
+        },
+        {
+          "type": "portal",
+          "x": 0.035,
+          "y": 0.93,
+          "radius": 24.0,
+          "pair": "b"
+        },
+        {
+          "type": "lasergate",
+          "x1": 0.34,
+          "y1": 0.245,
+          "x2": 0.66,
+          "y2": 0.245,
+          "period": 3.0,
+          "fire_time": 0.7,
+          "warn_time": 0.6,
+          "phase": 0.0,
+          "width": 9.0
+        },
+        {
+          "type": "lasergate",
+          "x1": 0.34,
+          "y1": 0.755,
+          "x2": 0.66,
+          "y2": 0.755,
+          "period": 3.0,
+          "fire_time": 0.7,
+          "warn_time": 0.6,
+          "phase": 0.25,
+          "width": 9.0
+        },
+        {
+          "type": "lasergate",
+          "x1": 0.245,
+          "y1": 0.3,
+          "x2": 0.245,
+          "y2": 0.7,
+          "period": 3.0,
+          "fire_time": 0.7,
+          "warn_time": 0.6,
+          "phase": 0.5,
+          "width": 9.0
+        },
+        {
+          "type": "lasergate",
+          "x1": 0.755,
+          "y1": 0.3,
+          "x2": 0.755,
+          "y2": 0.7,
+          "period": 3.0,
+          "fire_time": 0.7,
+          "warn_time": 0.6,
+          "phase": 0.75,
+          "width": 9.0
+        }
+      ],
+      "powerupsEnabled": true,
+      "wrapWalls": false,
+      "hint": "Every hazard at once, inside a laser cage that lights one face at a time.",
+      "cruiseSpeed": 309.0,
+      "baseSpeed": 525.3,
+      "parScore": 300,
+      "starTargets": [
+        300,
+        405,
+        525
+      ],
+      "number": 12,
+      "difficultyRating": 1.0
+    }
+  ]
+}

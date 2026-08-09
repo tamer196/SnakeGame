@@ -10,12 +10,14 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "verify": "node tools/verify.mjs dist"
   },
   "dependencies": {
     "pixi.js": "^8.6.0"
   },
   "devDependencies": {
+    "puppeteer-core": "^25.5.0",
     "typescript": "^5.7.2",
     "vite": "^6.0.5",
     "vitest": "^2.1.8"

@@ -13,9 +13,26 @@ as a slither instead of a chain of hops:
               C.SNAKE_SEGMENT_SPACING pixels, linearly interpolated between
               path samples so the body is smooth rather than stepped
 
-Steering is rate limited: each (sub)step the heading rotates toward the stored
-mouse target by at most `turn_rate * dt` radians, so the snake sweeps an arc
-and can never snap around instantly.
+Steering is rate limited, but the limit is a *radius*, not an angular rate.
+A turn of angular rate omega at speed v carves a circle of radius v / omega,
+so a constant omega means the faster you go the wider you turn - at level 12
+(525 px/s, omega 5.4) a U-turn swept a ~194 px circle, which is what made
+doubling back feel like steering a bus.  Instead the snake holds
+`C.SNAKE_MIN_TURN_RADIUS` constant and derives the rate from the current
+speed:
+
+    omega = clamp(speed / SNAKE_MIN_TURN_RADIUS,
+                  SNAKE_TURN_RATE, SNAKE_TURN_RATE_CAP)   * turn_mult
+
+so a hairpin costs the same ~40-66 px of arena at every speed and feels
+identical whether crawling or boosting.
+
+Turning that tightly means the head legitimately passes over its own neck, so
+self-collision is forgiving by design: :meth:`hits_self` ignores the first
+`C.SELF_COLLISION_SKIP` segments and then only counts an overlap that is
+deeper than `C.SELF_COLLISION_DEPTH` of the combined radii.  A forgiven
+overlap is still reported through :meth:`crossing_self`, so the renderer can
+draw the cross-over and the scene can play a whoosh.
 
 This module is pure simulation - it contains no drawing code whatsoever and
 imports nothing from `gfx`.
@@ -47,7 +64,13 @@ MAX_LENGTH: int = 400
 #: interpolate nicely.  Sub-stepping keeps the recorded path dense and makes
 #: turning arcs accurate at any frame rate.
 _MAX_SUBSTEP_PX: float = 7.0
-_MAX_SUBSTEPS: int = 8
+_MAX_SUBSTEPS: int = 12
+
+#: ...and no longer than this many radians of turn.  With a 20 px turn radius
+#: a hairpin is only ~6 path samples long, so a coarse angular step would cut
+#: the corner into a visible polygon and quietly widen the arc.  ~0.1 rad keeps
+#: the chord error under a tenth of a pixel.
+_MAX_SUBSTEP_RAD: float = 0.10
 
 #: A new path sample is only recorded once the head has moved at least this
 #: far; below it the newest sample is slid onto the head instead.  Keeps the
@@ -93,6 +116,10 @@ class Snake:
                         particle emitters use this for stretch / trail rate)
         bank            smoothed turn signal in -1..1, handy for leaning the
                         head sprite into a turn
+        turn_rate       the angular rate (rad/s) actually available on the last
+                        update, i.e. omega after the radius model and turn_mult
+        turn_input      raw, unsmoothed banking in -1..1: how hard the snake is
+                        turning right now as a fraction of `turn_rate`
     """
 
     # (Deliberately no __slots__: scenes and effects layers routinely tag extra
@@ -122,7 +149,19 @@ class Snake:
         self.target_length: int = int(clamp(float(length), MIN_LENGTH, MAX_LENGTH))
         self.current_speed: float = self.speed
         self.bank: float = 0.0
+        self.turn_rate: float = 0.0
+        self.turn_input: float = 0.0
         self.distance_travelled: float = 0.0
+
+        # Self-collision scan cache.  `_scan_tick` advances once per update, so
+        # hits_self() and crossing_self() share a single sweep per frame even
+        # though they are called independently.
+        self._scan_tick: int = 0
+        self._scan_key: Optional[tuple] = None
+        self._scan_hit: bool = False
+        self._scan_overlap: bool = False
+        self._cross_tick: int = -1
+        self._cross: bool = False
 
         self._target: Optional[Vec2] = None
         # Spacing is read once and floored, so a bad config value can never
@@ -200,27 +239,119 @@ class Snake:
         u = (t - _NECK_FRACTION) / (1.0 - _NECK_FRACTION)
         return lerp(C.SNAKE_BODY_RADIUS, C.SNAKE_TAIL_RADIUS, u ** _TAPER_EXP)
 
-    def hits_self(self) -> bool:
-        """True when the head circle overlaps its own body past the skip zone."""
+    def hits_self(
+        self,
+        skip: Optional[int] = None,
+        depth: Optional[float] = None,
+        enabled: bool = True,
+    ) -> bool:
+        """
+        True when the head has genuinely rammed its own body.
+
+        Because the snake can now hairpin on its own line, a plain circle
+        overlap is far too harsh: the head sweeps straight over its own neck on
+        every tight turn.  Two forgiveness knobs make that survivable.
+
+        :param skip:    how many segments behind the head are ignored outright
+                        (default ``C.SELF_COLLISION_SKIP``).  The whole hairpin
+                        arc has to fit inside this window.
+        :param depth:   how far the head must sink into a segment before it
+                        counts, as a fraction of the combined hit radii
+                        (default ``C.SELF_COLLISION_DEPTH``).  ``0.0`` means a
+                        graze is lethal - the pre-v2 behaviour - and ``1.0``
+                        means only a dead-centre hit counts.
+        :param enabled: ``False`` disables self-collision entirely (easy mode,
+                        ghost power-up) while still reporting the pass-over
+                        through :meth:`crossing_self`.
+
+        Called with no arguments it reproduces the configured default
+        behaviour, so existing callers need no change.
+        """
         try:
             if not self.alive:
                 return False
-            segs = self.segments
-            start = int(C.SELF_COLLISION_SKIP)
-            if start < 1:
-                start = 1
-            if len(segs) <= start:
-                return False
-            hx, hy = self.x, self.y
-            head_r = C.SNAKE_HEAD_RADIUS * _HEAD_HIT_SCALE
-            for i in range(start, len(segs)):
-                sx, sy = segs[i]
-                rr = head_r + self.radius_at(i) * _BODY_HIT_SCALE
-                if dist_sq(hx, hy, sx, sy) <= rr * rr:
-                    return True
-            return False
+            hit, overlap = self._scan_self(skip, depth)
+            real = bool(hit) and bool(enabled)
+            # Remember what this call decided so crossing_self() reports the
+            # pass-over even when the caller disabled the collision outright.
+            self._cross_tick = self._scan_tick
+            self._cross = (overlap or hit) and not real
+            return real
         except Exception:  # pragma: no cover - collision must never crash a frame
             return False
+
+    def crossing_self(self) -> bool:
+        """
+        True when the head is lying over its own body but was *forgiven*.
+
+        Read-only: it never changes the simulation.  The renderer uses it to
+        draw the head passing under/over the body and the scene uses it to cue
+        a whoosh.  It reuses the sweep :meth:`hits_self` already did this
+        frame, so asking for both costs one pass, not two.
+
+        A ``True`` answer from that cached sweep is taken as final.  A ``False``
+        one is re-checked against the *default* skip / depth, because a caller
+        that disabled self-collision does so by passing a skip larger than the
+        body (easy mode does exactly that), and such a sweep can never see an
+        overlap at all - without the re-check, easy mode would silently lose
+        every cross-over cue in the renderer.  The second sweep is memoised on
+        its own key and costs a few microseconds.
+        """
+        try:
+            if not self.alive:
+                return False
+            if self._cross_tick == self._scan_tick and self._cross:
+                return True
+            hit, overlap = self._scan_self(None, None)
+            return bool(overlap) and not bool(hit)
+        except Exception:  # pragma: no cover
+            return False
+
+    # -- collision internals -------------------------------------------
+    def _scan_self(self, skip: Optional[int],
+                   depth: Optional[float]) -> tuple[bool, bool]:
+        """
+        Sweep the body once and return ``(real_hit, any_overlap)``.
+
+        `any_overlap` is True when the head touches a post-skip segment at all;
+        `real_hit` only when it sinks past the `depth` threshold.  The result is
+        memoised per update tick and per (skip, depth) pair.
+        """
+        n_skip = int(C.SELF_COLLISION_SKIP if skip is None else skip)
+        if n_skip < 1:
+            n_skip = 1
+        f_depth = clamp(float(C.SELF_COLLISION_DEPTH if depth is None else depth),
+                        0.0, 1.0)
+
+        key = (self._scan_tick, n_skip, f_depth)
+        if self._scan_key == key:
+            return self._scan_hit, self._scan_overlap
+
+        hit = False
+        overlap = False
+        segs = self.segments
+        if len(segs) > n_skip:
+            hx, hy = self.x, self.y
+            head_r = float(C.SNAKE_HEAD_RADIUS) * _HEAD_HIT_SCALE
+            # Overlapping by `depth` of the combined radii leaves the centres
+            # (1 - depth) of that distance apart - the lethal radius.
+            bite = 1.0 - f_depth
+            for i in range(n_skip, len(segs)):
+                sx, sy = segs[i]
+                rr = head_r + self.radius_at(i) * _BODY_HIT_SCALE
+                d2 = dist_sq(hx, hy, sx, sy)
+                if d2 > rr * rr:
+                    continue
+                overlap = True
+                lethal = rr * bite
+                if d2 <= lethal * lethal:
+                    hit = True
+                    break        # a real hit outranks any further grazing
+
+        self._scan_key = key
+        self._scan_hit = hit
+        self._scan_overlap = overlap
+        return hit, overlap
 
     # ------------------------------------------------------------------
     # Commands
@@ -264,6 +395,9 @@ class Snake:
             self.y += dy
             self.path[:] = [(px + dx, py + dy) for px, py in self.path]
             self.segments[:] = [(sx + dx, sy + dy) for sx, sy in self.segments]
+            # The body just jumped; anything cached about it is stale.
+            self._scan_key = None
+            self._cross_tick = -1
         except Exception:  # pragma: no cover
             pass
 
@@ -278,7 +412,14 @@ class Snake:
         self.alive = True
         self.boosting = False
         self.bank = 0.0
+        self.turn_input = 0.0
+        self.turn_rate = 0.0
         self.current_speed = self.speed
+        self._scan_key = None
+        self._scan_hit = False
+        self._scan_overlap = False
+        self._cross_tick = -1
+        self._cross = False
         self._target = None
         self._seed_path()
         self._resolve_segments()
@@ -304,6 +445,9 @@ class Snake:
         try:
             dt = clamp(float(dt), 0.0, float(C.MAX_DT))
 
+            # Invalidate the self-collision cache: the body is about to move.
+            self._scan_tick += 1
+
             # Mercy invulnerability ticks down even while dead, so the death
             # animation cannot leave a stale timer behind.
             if self.invuln > 0.0:
@@ -321,14 +465,19 @@ class Snake:
                 self._resolve_segments()
                 return
 
+            turn_limit = self._turn_rate(speed) * max(0.0, float(turn_mult))
+            self.turn_rate = turn_limit
+
             # Sub-step so that neither the turning arc nor the recorded path
-            # depends on the frame rate.
+            # depends on the frame rate: bound each sub-step both in distance
+            # travelled and in angle turned.
             steps = int(travel / _MAX_SUBSTEP_PX) + 1
+            turned = turn_limit * dt
+            if turned > _MAX_SUBSTEP_RAD:
+                steps = max(steps, int(turned / _MAX_SUBSTEP_RAD) + 1)
             if steps > _MAX_SUBSTEPS:
                 steps = _MAX_SUBSTEPS
             sub_dt = dt / steps
-
-            turn_limit = self._turn_rate(speed) * max(0.0, float(turn_mult))
             heading_before = self.heading
 
             for _ in range(steps):
@@ -339,13 +488,15 @@ class Snake:
                 self.distance_travelled += step_len
                 self._push_path()
 
-            # `bank` is the normalised angular velocity, smoothed so renderers
-            # get a stable lean value instead of per-frame noise.
+            # `turn_input` is the raw normalised angular velocity (-1 hard
+            # left .. +1 hard right); `bank` smooths it so renderers get a
+            # stable lean value instead of per-frame noise.
             if turn_limit > 1e-6:
                 raw = clamp(_signed_delta(heading_before, self.heading) / (turn_limit * dt),
                             -1.0, 1.0)
             else:
                 raw = 0.0
+            self.turn_input = raw
             self.bank += (raw - self.bank) * min(1.0, dt * 10.0)
 
             self._resolve_segments()
@@ -369,16 +520,29 @@ class Snake:
 
     def _turn_rate(self, speed: float) -> float:
         """
-        Maximum steering rate for the current speed.
+        Maximum steering rate (rad/s) for `speed`, from a constant turn radius.
 
-        Slow snakes may pivot tightly (SNAKE_TURN_RATE_SLOW); as speed rises
-        toward SNAKE_MAX_SPEED the rate eases down to SNAKE_TURN_RATE, so a
-        boosting snake carves wide arcs and boost carries real risk.
+        The old model interpolated a fixed angular rate, which meant the turn
+        radius v / omega grew with speed - the reason doubling back at level 12
+        swept a ~194 px circle.  Here the *radius* is the constant:
+
+            omega = speed / SNAKE_MIN_TURN_RADIUS
+
+        clamped between the legacy floor SNAKE_TURN_RATE (so a crawling snake
+        still answers the mouse promptly rather than pivoting in place with
+        near-zero forward motion) and SNAKE_TURN_RATE_CAP (so the head cannot
+        spin faster than the body resample can follow).  The cap is only
+        reached above ~320 px/s, and even at the boosted top end it holds the
+        hairpin near 50 px instead of 200.
         """
-        lo, hi = float(C.SNAKE_BASE_SPEED), float(C.SNAKE_MAX_SPEED)
-        span = hi - lo
-        t = 0.0 if span <= 1e-6 else clamp((speed - lo) / span, 0.0, 1.0)
-        return lerp(C.SNAKE_TURN_RATE_SLOW, C.SNAKE_TURN_RATE, t)
+        radius = float(C.SNAKE_MIN_TURN_RADIUS)
+        if radius <= 1e-6:
+            return float(C.SNAKE_TURN_RATE_CAP)
+        lo = float(C.SNAKE_TURN_RATE)
+        hi = float(C.SNAKE_TURN_RATE_CAP)
+        if hi < lo:
+            lo, hi = hi, lo
+        return clamp(max(0.0, speed) / radius, lo, hi)
 
     def _update_boost(self, dt: float, want: bool, speed_mult: float) -> float:
         """Run the stamina economy and return the effective speed in px/s."""

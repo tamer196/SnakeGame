@@ -2,8 +2,8 @@
 Additive particle system for NEON SERPENT.
 
 This is the visual backbone of the game: the snake's slither trail, pickup
-bursts, death explosions, portal shockwaves, drifting ambient motes and stray
-sparks are all emitted from here.
+bursts, death explosions, portal shockwaves, drifting ambient motes, victory
+confetti and stray sparks are all emitted from here.
 
 Design notes
 ------------
@@ -17,9 +17,15 @@ Design notes
     light", i.e. a darker source pixel.  Nothing is ever rasterised per
     particle per frame.
 *   Particles that are *geometry* rather than blobs (``spark`` streaks,
-    ``shard`` triangles, ``ring`` shockwaves) are drawn into one reusable
-    full-size scratch layer which is composited once with ``BLEND_RGB_ADD``.
-    That keeps the additive look without a surface allocation per particle.
+    ``shard`` triangles, ``ring`` shockwaves, ``trail`` ribbons, ``bolt``
+    lightning and ``star`` twinkles) are drawn into one reusable full-size
+    scratch layer which is composited once with ``BLEND_RGB_ADD``.  That keeps
+    the additive look without a surface allocation per particle.
+*   Two optional per-particle animators sit on top of that: ``color_end`` fades
+    a particle from its birth colour to a second colour over its life (hot
+    white -> theme colour -> black is the house style), and ``turbulence``
+    applies a smooth, curl-like drift so bursts swirl instead of flying in
+    straight lines.  Both are opt-in and cost nothing when unused.
 
 Nothing in this module may raise: update and draw are wrapped so a bad value
 degrades into a missing particle instead of a crash.
@@ -40,11 +46,25 @@ from ..core.contracts import TAU, clamp
 RGB = Tuple[int, int, int]
 Ranged = Union[float, Tuple[float, float], Sequence[float]]
 
-# The five renderable particle kinds.
-KINDS: Tuple[str, ...] = ("dot", "spark", "ember", "shard", "ring")
+# Every renderable particle kind.
+#   dot    - soft round blob (the workhorse)
+#   spark  - velocity-aligned streak
+#   ember  - blob that twinkles on a per-particle phase
+#   shard  - spinning irregular triangle
+#   ring   - hollow expanding shockwave
+#   trail  - tapered ribbon stretched between last and current position
+#   bolt   - short jagged lightning segment
+#   smoke  - soft puff that expands and fades away
+#   star   - four-point twinkle
+KINDS: Tuple[str, ...] = ("dot", "spark", "ember", "shard", "ring",
+                          "trail", "bolt", "smoke", "star")
 
 # Kinds that need vector drawing on the scratch layer rather than a glow blit.
-_GEOMETRY_KINDS = frozenset(("spark", "shard", "ring"))
+_GEOMETRY_KINDS = frozenset(("spark", "shard", "ring", "trail", "bolt", "star"))
+
+# Geometry kinds that must NOT get a soft glow blob under them: a ring is
+# hollow by definition and a ribbon already carries its own body.
+_NO_CORE_KINDS = frozenset(("ring", "trail"))
 
 # --------------------------------------------------------------------------
 # Glow sprite cache
@@ -71,6 +91,9 @@ _GLOW_BANDS = 12
 _GLOW_EXTENT = 2.0
 _GLOW_PAD = 2.5
 
+_WHITE: RGB = (255, 255, 255)
+_BLACK: RGB = (0, 0, 0)
+
 
 def _bucket_radius(r: float) -> int:
     """Snap a radius onto a coarse ladder so sprites are shared aggressively."""
@@ -92,7 +115,7 @@ def _quantise_channel(v: float) -> int:
     return int((255.0 if v > 255.0 else v) / _COLOR_STEP + 0.5)
 
 
-def _quantise(color: Sequence[int], f: float) -> Tuple[int, int, int]:
+def _quantise(color: Sequence[float], f: float) -> Tuple[int, int, int]:
     """Return `color` scaled by brightness `f`, snapped to the cache levels."""
     if f <= 0.0:
         return (0, 0, 0)
@@ -145,7 +168,7 @@ def _build_glow(radius: int, color: RGB) -> pygame.Surface:
         return surf
 
 
-def glow_sprite(radius: float, color: Sequence[int], fade: float = 1.0) -> Optional[pygame.Surface]:
+def glow_sprite(radius: float, color: Sequence[float], fade: float = 1.0) -> Optional[pygame.Surface]:
     """
     Cached additive glow sprite for a radius/colour/brightness combination.
 
@@ -193,6 +216,13 @@ def _as_rgb(color: Sequence[int]) -> RGB:
         return P.UI_WHITE
 
 
+def _opt_rgb(color: Optional[Sequence[int]]) -> Optional[RGB]:
+    """`_as_rgb` that passes None through (for the optional end colour)."""
+    if color is None:
+        return None
+    return _as_rgb(color)
+
+
 def _rect_bounds(rect: object) -> Tuple[float, float, float, float]:
     """Read x/y/w/h from a pygame.Rect, a contracts.Rect or a 4-tuple."""
     try:
@@ -221,6 +251,11 @@ def _emit_count(rate: float, dt: float) -> int:
     return whole if whole < 64 else 64      # sanity cap on a monster dt
 
 
+def hot_white(color: Sequence[int], amount: float = 0.7) -> RGB:
+    """The "just ignited" version of a colour: pushed toward white."""
+    return P.lerp_color(_as_rgb(color), _WHITE, clamp(amount, 0.0, 1.0))
+
+
 # --------------------------------------------------------------------------
 # Particle record
 # --------------------------------------------------------------------------
@@ -229,7 +264,8 @@ class Particle:
 
     __slots__ = ("x", "y", "vx", "vy", "radius", "r0", "color", "life",
                  "max_life", "drag", "gravity", "glow", "shrink", "spin",
-                 "angle", "grow", "kind", "seed")
+                 "angle", "grow", "kind", "seed", "px", "py", "color_end",
+                 "turbulence")
 
     def __init__(self) -> None:
         self.x = 0.0
@@ -250,13 +286,24 @@ class Particle:
         self.grow = 0.0
         self.kind = "dot"
         self.seed = 0.0
+        # Previous position, used by the ``trail`` ribbon.
+        self.px = 0.0
+        self.py = 0.0
+        # Optional end-of-life colour and curl drift strength.
+        self.color_end: Optional[RGB] = None
+        self.turbulence = 0.0
 
     def reset(self, x: float, y: float, vx: float, vy: float, radius: float,
               color: RGB, life: float, drag: float, gravity: float,
               glow: bool, shrink: bool, spin: float, kind: str,
-              grow: float = 0.0) -> None:
+              grow: float = 0.0, color_end: Optional[RGB] = None,
+              turbulence: float = 0.0) -> None:
+        """Re-arm a pooled record.  Trailing arguments are optional so older
+        callers that pass the original thirteen positionally still work."""
         self.x = x
         self.y = y
+        self.px = x
+        self.py = y
         self.vx = vx
         self.vy = vy
         self.radius = radius
@@ -273,6 +320,31 @@ class Particle:
         self.grow = grow
         self.kind = kind
         self.seed = random.uniform(0.0, TAU)
+        self.color_end = color_end
+        self.turbulence = turbulence
+
+
+def _blend_color(p: Particle, fade: float) -> Sequence[float]:
+    """
+    The particle's colour right now.
+
+    With no ``color_end`` this is just the birth colour (no arithmetic at all).
+    Otherwise it is a linear ramp from ``color`` at birth to ``color_end`` at
+    death, returned as floats - every consumer either quantises it or hands it
+    to ``P.shade``, both of which cope with non-integers.
+    """
+    end = p.color_end
+    if end is None:
+        return p.color
+    u = 1.0 - fade
+    if u <= 0.0:
+        return p.color
+    if u >= 1.0:
+        return end
+    a = p.color
+    return (a[0] + (end[0] - a[0]) * u,
+            a[1] + (end[1] - a[1]) * u,
+            a[2] + (end[2] - a[2]) * u)
 
 
 # --------------------------------------------------------------------------
@@ -304,6 +376,10 @@ class ParticleSystem:
             self._pool.extend(self._items[: self._pool_cap - len(self._pool)])
         self._items.clear()
 
+    def headroom(self) -> int:
+        """How many more particles fit before the cap starts evicting."""
+        return max(0, self.max_particles - len(self._items))
+
     def _acquire(self) -> Optional[Particle]:
         """Get a free record, evicting the oldest particle when at capacity."""
         items = self._items
@@ -322,15 +398,23 @@ class ParticleSystem:
               radius: float = 3.0, color: Sequence[int] = (255, 255, 255),
               life: float = 0.8, drag: float = 1.6, gravity: float = 0.0,
               glow: bool = True, shrink: bool = True, spin: float = 0.0,
-              kind: str = "dot", grow: float = 0.0) -> Optional[Particle]:
-        """Add a single particle.  Never raises; returns the record or None."""
+              kind: str = "dot", grow: float = 0.0,
+              color_end: Optional[Sequence[int]] = None,
+              turbulence: float = 0.0) -> Optional[Particle]:
+        """
+        Add a single particle.  Never raises; returns the record or None.
+
+        `color_end` (optional) makes the particle ramp from `color` at birth to
+        `color_end` at death.  `turbulence` (px/s^2) adds smooth curl-like
+        drift so the particle swirls instead of travelling in a straight line.
+        """
         try:
             # Reject NaN / inf up front.  A single non-finite particle would
             # otherwise throw inside the draw loop every frame it lives for,
             # taking the whole frame's particles with it.  Summing first means
             # one isfinite() call covers every field (NaN and inf propagate).
             if not math.isfinite(x + y + vx + vy + radius + life + drag
-                                 + gravity + spin + grow):
+                                 + gravity + spin + grow + turbulence):
                 return None
             p = self._acquire()
             if p is None:
@@ -340,7 +424,8 @@ class ParticleSystem:
             p.reset(float(x), float(y), float(vx), float(vy),
                     max(0.5, float(radius)), _as_rgb(color),
                     max(0.01, float(life)), float(drag), float(gravity),
-                    bool(glow), bool(shrink), float(spin), kind, float(grow))
+                    bool(glow), bool(shrink), float(spin), kind, float(grow),
+                    _opt_rgb(color_end), float(turbulence))
             self._items.append(p)
             return p
         except Exception:
@@ -349,15 +434,21 @@ class ParticleSystem:
     def burst(self, x: float, y: float, color: Sequence[int], count: int = 18,
               speed: Ranged = (40.0, 190.0), life: Ranged = (0.35, 0.9),
               radius: Ranged = (2.0, 5.0), spread: Optional[float] = None,
-              direction: Optional[float] = None, glow: bool = True) -> None:
+              direction: Optional[float] = None, glow: bool = True,
+              *, color_end: Optional[Sequence[int]] = None,
+              turbulence: float = 0.0, gravity: float = 0.0,
+              kind: Optional[str] = None) -> None:
         """
         Explode `count` particles out of a point.
 
         `direction` is the centre angle in radians (None = all directions);
-        `spread` is the total cone width in radians.
+        `spread` is the total cone width in radians.  The keyword-only extras
+        (`color_end`, `turbulence`, `gravity`, `kind`) are new and default to
+        the original behaviour.
         """
         try:
             rgb = _as_rgb(color)
+            end = _opt_rgb(color_end)
             if direction is None:
                 base = 0.0
                 half = math.pi if spread is None else float(spread) * 0.5
@@ -378,46 +469,72 @@ class ParticleSystem:
                 # Small particles are flung further: reads as a hot core with
                 # fast outriders instead of a uniform shell.
                 sp *= clamp(1.25 - 0.10 * r, 0.35, 1.25)
+                k = kind if kind is not None else \
+                    ("spark" if (glow and i % 4 == 0) else "dot")
                 self.spawn(x, y,
                            vx=math.cos(ang) * sp, vy=math.sin(ang) * sp,
                            radius=r, color=rgb, life=_rng_range(life, 0.6),
                            drag=random.uniform(1.4, 2.6), glow=glow,
                            spin=random.uniform(-7.0, 7.0),
-                           kind="spark" if (glow and i % 4 == 0) else "dot")
+                           gravity=gravity, color_end=end,
+                           turbulence=turbulence, kind=k)
         except Exception:
             pass
 
     def trail(self, x: float, y: float, color: Sequence[int], dt: float,
               rate: float = C.TRAIL_EMIT_RATE, spread: float = 0.9,
               speed: Ranged = (8.0, 44.0), life: Ranged = (0.25, 0.6),
-              radius: Ranged = (2.0, 5.0)) -> None:
-        """Continuous emission from a moving point (the snake head)."""
+              radius: Ranged = (2.0, 5.0),
+              *, color_end: Optional[Sequence[int]] = None,
+              turbulence: float = 0.0, ribbon: float = 0.0) -> None:
+        """
+        Continuous emission from a moving point (the snake head).
+
+        `ribbon` (0..1, new) is the chance that an emitted particle is a
+        stretched ``trail`` ribbon rather than a blob, for a silkier wake.
+        """
         try:
             rgb = _as_rgb(color)
+            end = _opt_rgb(color_end)
+            rib = clamp(ribbon, 0.0, 1.0)
             for _ in range(_emit_count(rate, dt)):
                 ang = random.uniform(0.0, TAU)
                 sp = _rng_range(speed, 24.0)
                 # Jitter the origin a touch so the trail has body, not a wire.
                 jx = x + math.cos(ang) * spread * 3.0
                 jy = y + math.sin(ang) * spread * 3.0
+                roll = random.random()
+                if roll < rib:
+                    k = "trail"
+                elif roll < rib + 0.22:
+                    k = "ember"
+                else:
+                    k = "dot"
                 self.spawn(jx, jy,
                            vx=math.cos(ang) * sp, vy=math.sin(ang) * sp,
                            radius=_rng_range(radius, 3.0), color=rgb,
                            life=_rng_range(life, 0.4), drag=2.2,
-                           kind="ember" if random.random() < 0.22 else "dot")
+                           color_end=end, turbulence=turbulence, kind=k)
         except Exception:
             pass
 
     def ring(self, x: float, y: float, color: Sequence[int], radius: float = 40.0,
-             count: int = 26, life: float = 0.6, speed: float = 120.0) -> None:
+             count: int = 26, life: float = 0.6, speed: float = 120.0,
+             *, color_end: Optional[Sequence[int]] = None,
+             width: float = 0.10) -> None:
         """A shockwave: one expanding hollow circle plus a ring of outriders."""
         try:
             rgb = _as_rgb(color)
+            end = _opt_rgb(color_end)
             life = max(0.05, float(life))
             # The hollow circle grows from a point to `radius` over its life.
-            self.spawn(x, y, radius=max(2.0, radius * 0.12), color=rgb,
-                       life=life, drag=0.0, shrink=False, kind="ring",
-                       grow=max(0.0, radius) / life)
+            wave = self.spawn(x, y, radius=max(2.0, radius * 0.12), color=rgb,
+                              life=life, drag=0.0, shrink=False, kind="ring",
+                              grow=max(0.0, radius) / life, color_end=end)
+            if wave is not None:
+                # `spin` is unused by rings, so it carries the stroke width
+                # fraction instead - no extra slot for a one-kind parameter.
+                wave.spin = clamp(width, 0.02, 0.5)
             n = int(clamp(count, 0, 200))
             for i in range(n):
                 ang = (i / n) * TAU
@@ -426,15 +543,24 @@ class ParticleSystem:
                 self.spawn(x + ca * r0, y + sa * r0,
                            vx=ca * speed, vy=sa * speed,
                            radius=random.uniform(2.0, 4.0), color=rgb,
-                           life=life * random.uniform(0.6, 1.1), drag=2.4)
+                           life=life * random.uniform(0.6, 1.1), drag=2.4,
+                           color_end=end)
         except Exception:
             pass
 
     def spark_line(self, x1: float, y1: float, x2: float, y2: float,
-                   color: Sequence[int], count: int = 12, life: float = 0.4) -> None:
-        """Scatter sparks along a segment (laser gates, self-collision flashes)."""
+                   color: Sequence[int], count: int = 12, life: float = 0.4,
+                   *, color_end: Optional[Sequence[int]] = None,
+                   bolts: int = 0) -> None:
+        """
+        Scatter sparks along a segment (laser gates, self-collision flashes).
+
+        `bolts` (new) additionally drops that many jagged lightning fragments
+        along the same line.
+        """
         try:
             rgb = _as_rgb(color)
+            end = _opt_rgb(color_end)
             dx, dy = x2 - x1, y2 - y1
             length = math.hypot(dx, dy)
             if length < 1e-6:
@@ -454,27 +580,218 @@ class ParticleSystem:
                            vy=ny * side * sp + random.uniform(-30.0, 30.0),
                            radius=random.uniform(1.8, 3.4), color=rgb,
                            life=max(0.05, life) * random.uniform(0.6, 1.2),
-                           drag=3.0, kind="spark")
+                           drag=3.0, color_end=end, kind="spark")
+            for _ in range(int(clamp(bolts, 0, 40))):
+                t = random.random()
+                self.spawn(x1 + dx * t, y1 + dy * t,
+                           radius=random.uniform(3.0, 6.0),
+                           color=hot_white(rgb, 0.5), color_end=end or rgb,
+                           life=max(0.05, life) * random.uniform(0.4, 0.8),
+                           drag=6.0, shrink=False, kind="bolt")
         except Exception:
             pass
 
     def ambient(self, rect: object, color: Sequence[int], dt: float,
-                rate: float = 6.0) -> None:
-        """Slow drifting motes inside `rect`, for atmosphere behind the action."""
+                rate: float = 6.0, *, turbulence: float = 0.0,
+                twinkle: float = 0.0) -> None:
+        """
+        Slow drifting motes inside `rect`, for atmosphere behind the action.
+
+        `twinkle` (0..1, new) is the chance a mote is a four-point ``star``.
+        """
         try:
             x, y, w, h = _rect_bounds(rect)
             if w <= 1.0 or h <= 1.0:
                 return
             rgb = _as_rgb(color)
+            tw = clamp(twinkle, 0.0, 1.0)
             for _ in range(_emit_count(rate, dt)):
+                roll = random.random()
+                if roll < tw:
+                    k = "star"
+                elif roll < tw + 0.08:
+                    k = "shard"
+                else:
+                    k = "dot"
                 self.spawn(x + random.random() * w, y + random.random() * h,
                            vx=random.uniform(-14.0, 14.0),
                            vy=random.uniform(-22.0, -4.0),
                            radius=random.uniform(1.6, 3.6), color=rgb,
                            life=random.uniform(2.0, 5.0), drag=0.25,
-                           shrink=False,
-                           kind="shard" if random.random() < 0.08 else "dot",
+                           shrink=False, kind=k, turbulence=turbulence,
                            spin=random.uniform(-1.6, 1.6))
+        except Exception:
+            pass
+
+    # -- new emitters ------------------------------------------------------
+    def explosion(self, x: float, y: float, color: Sequence[int],
+                  power: float = 1.0, *, smoke: bool = True,
+                  gravity: float = 0.0) -> None:
+        """
+        A layered detonation: shockwave ring, shards, embers, smoke and bolts.
+
+        `power` scales both the particle counts and the reach; 1.0 is a food
+        orb popping, 2.5 is a death.  The whole thing is one call so callers
+        do not have to hand-tune four emitters to get a good bang.
+        """
+        try:
+            pw = clamp(power, 0.15, 4.0)
+            rgb = _as_rgb(color)
+            hot = hot_white(rgb, 0.72)
+            dark = P.shade(rgb, 0.06)
+
+            # 1. shockwave: hot at birth, cooling into the base colour.
+            self.ring(x, y, hot, radius=64.0 * pw, count=int(8 * pw),
+                      life=0.34 + 0.16 * pw, speed=150.0 * pw,
+                      color_end=rgb, width=0.09)
+
+            # 2. shards - the fast, hard-edged debris.
+            n = int(clamp(9.0 * pw, 3, 46))
+            for i in range(n):
+                ang = (i / n) * TAU + random.uniform(-0.3, 0.3)
+                sp = random.uniform(120.0, 340.0) * pw
+                self.spawn(x, y, vx=math.cos(ang) * sp, vy=math.sin(ang) * sp,
+                           radius=random.uniform(2.4, 5.2) * (0.7 + 0.3 * pw),
+                           color=hot, color_end=dark,
+                           life=random.uniform(0.35, 0.75) * (0.8 + 0.3 * pw),
+                           drag=2.2, gravity=gravity, kind="shard",
+                           spin=random.uniform(-10.0, 10.0), turbulence=40.0)
+
+            # 3. embers - slower, twinkling, swirled by turbulence.
+            n = int(clamp(15.0 * pw, 6, 70))
+            for i in range(n):
+                ang = random.uniform(0.0, TAU)
+                sp = random.uniform(30.0, 210.0) * pw
+                self.spawn(x, y, vx=math.cos(ang) * sp, vy=math.sin(ang) * sp,
+                           radius=random.uniform(1.8, 4.2),
+                           color=hot, color_end=dark,
+                           life=random.uniform(0.5, 1.3),
+                           drag=1.7, gravity=gravity, kind="ember",
+                           turbulence=random.uniform(30.0, 95.0))
+
+            # 4. smoke - soft expanding puffs that linger after the light dies.
+            if smoke:
+                n = int(clamp(6.0 * pw, 2, 26))
+                for _ in range(n):
+                    ang = random.uniform(0.0, TAU)
+                    sp = random.uniform(10.0, 70.0) * pw
+                    r = random.uniform(7.0, 15.0) * (0.7 + 0.4 * pw)
+                    self.spawn(x, y,
+                               vx=math.cos(ang) * sp, vy=math.sin(ang) * sp,
+                               radius=r, color=P.shade(rgb, 0.5),
+                               color_end=_BLACK,
+                               life=random.uniform(0.7, 1.5), drag=1.1,
+                               shrink=False, grow=r * 1.4, kind="smoke",
+                               turbulence=random.uniform(10.0, 40.0))
+
+            # 5. a couple of lightning fragments for the first instant.
+            for _ in range(int(clamp(2.0 * pw, 1, 8))):
+                ang = random.uniform(0.0, TAU)
+                sp = random.uniform(60.0, 180.0) * pw
+                self.spawn(x, y, vx=math.cos(ang) * sp, vy=math.sin(ang) * sp,
+                           radius=random.uniform(4.0, 8.0) * pw,
+                           color=hot, color_end=rgb,
+                           life=random.uniform(0.10, 0.22), drag=5.0,
+                           shrink=False, kind="bolt")
+        except Exception:
+            pass
+
+    def confetti(self, rect: object, colors: Sequence[Sequence[int]],
+                 count: int = 70, *, life: Ranged = (1.6, 3.4),
+                 gravity: float = 240.0, from_top: bool = True) -> None:
+        """
+        Victory-screen confetti: spinning shards raining through `rect`.
+
+        `colors` is a palette to pick from (empty falls back to gold/white).
+        With `from_top` the shards start just above the rect and fall through
+        it; otherwise they are scattered across the whole rect at once.
+        """
+        try:
+            x, y, w, h = _rect_bounds(rect)
+            if w <= 1.0 or h <= 1.0:
+                return
+            pal: List[RGB] = [_as_rgb(c) for c in colors] if colors else []
+            if not pal:
+                pal = [P.UI_GOLD, P.UI_WHITE, P.UI_GOOD]
+            n = int(clamp(count, 0, 400))
+            for i in range(n):
+                col = pal[i % len(pal)]
+                cx = x + random.random() * w
+                cy = (y - random.random() * h * 0.45) if from_top \
+                    else (y + random.random() * h)
+                self.spawn(cx, cy,
+                           vx=random.uniform(-70.0, 70.0),
+                           vy=random.uniform(20.0, 130.0),
+                           radius=random.uniform(2.6, 5.4), color=col,
+                           color_end=P.shade(col, 0.25),
+                           life=_rng_range(life, 2.2), drag=0.55,
+                           gravity=gravity, shrink=False,
+                           spin=random.uniform(-9.0, 9.0),
+                           turbulence=random.uniform(20.0, 70.0),
+                           kind="star" if (i % 5 == 0) else "shard")
+        except Exception:
+            pass
+
+    def stream(self, x: float, y: float, angle: float, color: Sequence[int],
+               dt: float, rate: float = 90.0, *, speed: Ranged = (140.0, 300.0),
+               spread: float = 0.30, life: Ranged = (0.25, 0.6),
+               radius: Ranged = (2.0, 4.5),
+               color_end: Optional[Sequence[int]] = None,
+               turbulence: float = 0.0, drag: float = 1.4) -> None:
+        """
+        A directed jet: continuous emission in a narrow cone about `angle`.
+
+        Use for boost thrust, portal exhaust or a hazard vent.  Like `trail`
+        this is rate-based, so pass the frame `dt`.
+        """
+        try:
+            rgb = _as_rgb(color)
+            end = _opt_rgb(color_end)
+            half = max(0.0, float(spread)) * 0.5
+            for _ in range(_emit_count(rate, dt)):
+                ang = float(angle) + random.uniform(-half, half)
+                sp = _rng_range(speed, 200.0)
+                self.spawn(x, y,
+                           vx=math.cos(ang) * sp, vy=math.sin(ang) * sp,
+                           radius=_rng_range(radius, 3.0), color=rgb,
+                           color_end=end, life=_rng_range(life, 0.4),
+                           drag=drag, turbulence=turbulence,
+                           kind="spark" if random.random() < 0.3 else "dot")
+        except Exception:
+            pass
+
+    def implode(self, x: float, y: float, color: Sequence[int],
+                radius: float = 90.0, count: int = 26, life: float = 0.5,
+                *, swirl: float = 1.1,
+                color_end: Optional[Sequence[int]] = None) -> None:
+        """
+        Particles converging inward onto (x, y) - a portal or pickup "suck".
+
+        They start on a circle of `radius` and are given exactly the inward
+        speed that lands them on the centre as they expire (drag is off, so
+        the arrival is dead on), plus a tangential `swirl` component so the
+        collapse spirals.
+        """
+        try:
+            rgb = _as_rgb(color)
+            end = _opt_rgb(color_end) or hot_white(rgb, 0.8)
+            rad = max(4.0, float(radius))
+            lf = max(0.08, float(life))
+            n = int(clamp(count, 0, 240))
+            for i in range(n):
+                ang = (i / max(1, n)) * TAU + random.uniform(-0.12, 0.12)
+                ca, sa = math.cos(ang), math.sin(ang)
+                jitter = random.uniform(0.82, 1.12)
+                r = rad * jitter
+                inward = -r / lf
+                tang = swirl * r / lf
+                self.spawn(x + ca * r, y + sa * r,
+                           vx=ca * inward - sa * tang,
+                           vy=sa * inward + ca * tang,
+                           radius=random.uniform(2.0, 4.0), color=rgb,
+                           color_end=end,
+                           life=lf * random.uniform(0.85, 1.0),
+                           drag=0.0, shrink=False, kind="trail")
         except Exception:
             pass
 
@@ -488,11 +805,14 @@ class ParticleSystem:
             if dt > C.MAX_DT:
                 dt = C.MAX_DT
             self._t += dt
+            t = self._t
 
             alive: List[Particle] = []
             append = alive.append
             pool = self._pool
             pool_cap = self._pool_cap
+            sin = math.sin
+            cos = math.cos
             for p in self._items:
                 p.life -= dt
                 if p.life <= 0.0:
@@ -506,9 +826,20 @@ class ParticleSystem:
                     p.vy *= f
                 if p.gravity:
                     p.vy += p.gravity * dt
+                if p.turbulence:
+                    # A cheap two-trig approximation of a curl-noise field:
+                    # the acceleration on x depends only on y (and vice versa),
+                    # which is what makes the flow rotational rather than a
+                    # uniform push, so bursts braid instead of fanning out.
+                    k = p.turbulence * dt
+                    p.vx += sin(p.y * 0.017 + t * 1.30 + p.seed) * k
+                    p.vy += cos(p.x * 0.017 - t * 1.10 + p.seed) * k
+                p.px = p.x
+                p.py = p.y
                 p.x += p.vx * dt
                 p.y += p.vy * dt
-                if p.spin:
+                if p.spin and p.kind != "ring":
+                    # `ring` borrows `spin` as its stroke width - never rotate.
                     p.angle += p.spin * dt
                 if p.grow:
                     p.radius += p.grow * dt
@@ -564,9 +895,10 @@ class ParticleSystem:
                 kind = p.kind
                 if kind in _GEOMETRY_KINDS:
                     geometry.append(p)
-                    if kind != "ring":
+                    if kind not in _NO_CORE_KINDS:
                         # A soft core under the streak/shard sells the glow.
-                        spr = glow_sprite(r * 0.9, p.color, fade * 0.55)
+                        spr = glow_sprite(r * 0.9, _blend_color(p, fade),
+                                          fade * 0.55)
                         if spr is not None:
                             hw = spr.get_width() * 0.5
                             blit(spr, (int(x - hw), int(y - hw)), None, add)
@@ -576,6 +908,12 @@ class ParticleSystem:
                 if kind == "ember":
                     # Embers twinkle: a cheap per-particle phase-shifted sine.
                     bright *= 0.62 + 0.38 * math.sin(t * 11.0 + p.seed)
+                elif kind == "smoke":
+                    # Smoke is a dim, quadratically-fading haze: it must never
+                    # read as a bright blob or the additive blend blows out.
+                    bright *= fade * 0.34
+                    if bright < 0.012:
+                        continue
                 if not p.glow:
                     # No halo requested: pick a tighter sprite so the same
                     # cached art reads as a hard point instead of a bloom.
@@ -586,7 +924,7 @@ class ParticleSystem:
                 # Inlined cache lookup: this is the hottest loop in the game,
                 # so the common (cache hit) path avoids two function calls.
                 # `bright` and the colour channels are always >= 0 here.
-                col = p.color
+                col = p.color if p.color_end is None else _blend_color(p, fade)
                 cr = col[0] * bright
                 cg = col[1] * bright
                 cb = col[2] * bright
@@ -609,7 +947,8 @@ class ParticleSystem:
 
     def _draw_geometry(self, surface: pygame.Surface, geometry: List[Particle],
                        size: Tuple[int, int], add: int) -> None:
-        """Draw streaks, shards and rings on the scratch layer, then add it."""
+        """Draw streaks, shards, rings, ribbons, bolts and stars on the
+        scratch layer, then composite the dirty box once."""
         layer = self._get_layer(size)
         if layer is None:
             return
@@ -618,10 +957,20 @@ class ParticleSystem:
             # composited.  Clearing all of 1280x720 for a couple of sparks
             # costs more than every other particle in the frame put together.
             sw, sh = size
+            t = self._t
             x0 = y0 = 1.0e9
             x1 = y1 = -1.0e9
             for p in geometry:
                 pad = p.radius * 2.2 + 30.0     # streak / shard / ring reach
+                if p.kind == "trail":
+                    # A ribbon reaches back to where the particle was: at the
+                    # clamped dt and the fastest particle we ship that is well
+                    # under 30px, but a teleport must not smear off-box.
+                    d = abs(p.x - p.px) + abs(p.y - p.py)
+                    if d > pad:
+                        pad = d
+                elif p.kind == "bolt":
+                    pad += p.radius * 4.0
                 if p.x - pad < x0:
                     x0 = p.x - pad
                 if p.y - pad < y0:
@@ -647,7 +996,7 @@ class ParticleSystem:
                 fade = p.life / p.max_life
                 if fade > 1.0:
                     fade = 1.0
-                col = P.shade(p.color, fade)
+                col = P.shade(_blend_color(p, fade), fade)
                 if not (col[0] or col[1] or col[2]):
                     continue
                 x, y, r = p.x, p.y, p.radius
@@ -677,12 +1026,72 @@ class ParticleSystem:
                     )
                     polygon(layer, col, [(int(px), int(py)) for px, py in pts])
 
+                elif kind == "trail":
+                    # A ribbon: a quad that is wide at the head and pinched at
+                    # the tail, so a fast particle draws a tapered smear.
+                    dx = x - p.px
+                    dy = y - p.py
+                    d = math.hypot(dx, dy)
+                    if d < 0.6:
+                        # Barely moved - fall back to a dot-sized stub so the
+                        # ribbon never vanishes at the top of its arc.
+                        circle(layer, col, (int(x), int(y)), max(1, int(r)))
+                        continue
+                    # Stretch the tail backwards a little for extra length.
+                    ex = p.px - dx * 0.9
+                    ey = p.py - dy * 0.9
+                    nx = -dy / d
+                    ny = dx / d
+                    hw = r * 0.85
+                    tw = r * 0.12
+                    polygon(layer, col, [
+                        (int(x + nx * hw), int(y + ny * hw)),
+                        (int(x - nx * hw), int(y - ny * hw)),
+                        (int(ex - nx * tw), int(ey - ny * tw)),
+                        (int(ex + nx * tw), int(ey + ny * tw)),
+                    ])
+
+                elif kind == "bolt":
+                    # Three chained segments with a sine-driven perpendicular
+                    # kink: deterministic per particle (via `seed`) but
+                    # flickering in time, which is what sells "electricity".
+                    a = p.angle
+                    ln = clamp(r * 4.0, 8.0, 54.0)
+                    ca, sa = math.cos(a), math.sin(a)
+                    nx, ny = -sa, ca
+                    w = 1 if r < 3.4 else 2
+                    ax, ay = x, y
+                    for i in (1, 2, 3):
+                        f = i / 3.0
+                        kink = math.sin(p.seed * 5.7 + i * 2.1 + t * 34.0) \
+                            * ln * 0.26 * (1.0 - f * 0.5)
+                        bx = x + ca * ln * f + nx * kink
+                        by = y + sa * ln * f + ny * kink
+                        line(layer, col, (int(ax), int(ay)), (int(bx), int(by)), w)
+                        ax, ay = bx, by
+
+                elif kind == "star":
+                    # Four-point twinkle: an eight-vertex polygon alternating
+                    # a long spike and a short waist.
+                    a = p.angle
+                    lo = r * 0.42
+                    hi = r * 2.6
+                    pts = []
+                    for i in range(8):
+                        ang = a + i * 0.7853981633974483      # pi / 4
+                        rad = hi if (i & 1) == 0 else lo
+                        pts.append((int(x + math.cos(ang) * rad),
+                                    int(y + math.sin(ang) * rad)))
+                    polygon(layer, col, pts)
+
                 else:  # "ring"
                     rr = int(r)
                     if rr < 2:
                         continue
                     # Hollow, thinning as it expands - a classic shockwave.
-                    width = max(1, int(rr * 0.10 * (0.4 + 0.6 * fade)))
+                    # `spin` carries the stroke fraction (see `ring`).
+                    frac = p.spin if 0.02 <= p.spin <= 0.5 else 0.10
+                    width = max(1, int(rr * frac * (0.4 + 0.6 * fade)))
                     circle(layer, col, (int(x), int(y)), rr, min(width, rr - 1))
             layer.set_clip(None)
             surface.blit(layer, dirty.topleft, dirty, add)

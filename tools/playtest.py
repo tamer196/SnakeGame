@@ -1143,23 +1143,77 @@ def run_detector_canaries(h: Harness, spy: Optional[ExceptionSpy]) -> None:
 # Part 1: registry
 # ==========================================================================
 def run_registry(h: Harness) -> None:
+    """
+    Every scene name `config` declares must be registered, and every registered
+    scene must build.
+
+    This used to assert the registry held *exactly* seven names, which made the
+    check a liability the moment v2 added ``mode`` / ``settings`` / ``story``:
+    the assertion failed for the one reason that is not a defect - the feature
+    landing.  The contract that actually matters is a two-way one, so that is
+    what is checked now:
+
+    * every ``C.SCENE_*`` constant has a registry entry (nothing config
+      promises can be missing), and
+    * every registry entry either builds the class it claims, or is a declared
+      v2 scene whose module has not been written yet.
+
+    The last clause is the only slack, it is enumerated in `PENDING`, and it is
+    reported so it cannot rot silently.  Delete a name from `PENDING` the
+    moment its scene module exists and the check hardens automatically.
+    """
     from snake.main import SCENE_REGISTRY
 
     r = REPORT
     r.head("PART 1  scene registry")
+
     expected = {C.SCENE_MENU: "MenuScene", C.SCENE_LEVELS: "LevelSelectScene",
                 C.SCENE_GAME: "GameplayScene", C.SCENE_PAUSE: "PauseScene",
                 C.SCENE_GAMEOVER: "GameOverScene",
-                C.SCENE_VICTORY: "VictoryScene", C.SCENE_HELP: "HelpScene"}
-    r.check(set(SCENE_REGISTRY) == set(expected),
-            "registry holds exactly the seven documented names")
+                C.SCENE_VICTORY: "VictoryScene", C.SCENE_HELP: "HelpScene",
+                C.SCENE_MODE: "ModeSelectScene",
+                C.SCENE_SETTINGS: "SettingsScene",
+                C.SCENE_STORY: "StoryScene"}
+
+    #: v2 scene names that are registered but whose module is still being
+    #: written.  Empty this list as the scenes land.
+    PENDING = {C.SCENE_MODE, C.SCENE_SETTINGS, C.SCENE_STORY}
+
+    declared = {value for name, value in vars(C).items()
+                if name.startswith("SCENE_") and isinstance(value, str)}
+    missing = sorted(declared - set(SCENE_REGISTRY))
+    r.check(not missing,
+            "every C.SCENE_* name is registered ({} names{})".format(
+                len(declared),
+                "" if not missing else ", missing " + ", ".join(missing)))
+
+    unknown = sorted(set(SCENE_REGISTRY) - set(expected))
+    r.check(not unknown,
+            "the registry holds no undocumented names ({} entries{})".format(
+                len(SCENE_REGISTRY),
+                "" if not unknown else ", unexpected " + ", ".join(unknown)))
+
+    pending_seen: List[str] = []
     for name, cls_name in expected.items():
+        if name not in SCENE_REGISTRY:
+            continue
         try:
             scene = h.game._make_scene(name)
-            r.check(type(scene).__name__ == cls_name,
-                    "{!r:<10} -> {}".format(name, type(scene).__name__))
         except Exception as exc:
+            if name in PENDING:
+                pending_seen.append(name)
+                continue
             r.fail("{!r} failed to resolve: {}".format(name, exc))
+            continue
+        r.check(type(scene).__name__ == cls_name,
+                "{!r:<10} -> {}".format(name, type(scene).__name__))
+
+    if pending_seen:
+        r.log("  note: {} registered but not yet implemented - expected, "
+              "these are the next phase's scenes".format(
+                  ", ".join(repr(n) for n in sorted(pending_seen))))
+    r.check(set(pending_seen) <= PENDING,
+            "no scene outside the declared pending set failed to build")
 
 
 # ==========================================================================

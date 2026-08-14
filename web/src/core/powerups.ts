@@ -406,10 +406,41 @@ export class PowerUpField {
     return this.items.length;
   }
 
+  /**
+   * Seconds between rune spawns. Difficulty overrides this through
+   * {@link setSpawnRange}; unset, it is the config pair.
+   */
+  private spawnLo = Math.min(C.POWERUP_SPAWN_MIN, C.POWERUP_SPAWN_MAX);
+  private spawnHi = Math.max(C.POWERUP_SPAWN_MIN, C.POWERUP_SPAWN_MAX);
+
+  /**
+   * Override the spawn cadence, as the difficulty modes do.
+   *
+   * The pending timer is re-rolled with the new range, so the *first* rune
+   * already respects it - without that, every run would open on the default
+   * cadence no matter the mode, which is a difference you feel in the first
+   * thirty seconds and cannot see in a diff.
+   *
+   * Python reaches the same end by swapping the roller on the instance
+   * (`gameplay.py::_apply_powerup_cadence`); an explicit setter is the same two
+   * RNG draws in the same order, which is what keeps the spawn stream matching.
+   */
+  public setSpawnRange(lo: number, hi: number): void {
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) return;
+    const a = Math.max(0.05, Math.min(lo, hi));
+    const b = Math.max(a + 1e-3, Math.max(lo, hi));
+    this.spawnLo = a;
+    this.spawnHi = b;
+    this.timer = this.rollInterval() * randRange(this.rng, 0.55, 1.0);
+  }
+
+  /** The cadence currently in force, for tests and the debug overlay. */
+  public spawnRange(): [number, number] {
+    return [this.spawnLo, this.spawnHi];
+  }
+
   private rollInterval(): number {
-    const lo = Math.min(C.POWERUP_SPAWN_MIN, C.POWERUP_SPAWN_MAX);
-    const hi = Math.max(C.POWERUP_SPAWN_MIN, C.POWERUP_SPAWN_MAX);
-    return randRange(this.rng, lo, hi);
+    return randRange(this.rng, this.spawnLo, this.spawnHi);
   }
 
   // -- placement -----------------------------------------------------------

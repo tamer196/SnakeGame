@@ -5,9 +5,13 @@
  * Kept deliberately thin: everything interesting lives in app/ and scenes/.
  */
 
+import { Audio, installUnlockGesture } from "./audio";
 import { Game } from "./app/Game";
+import { SaveData } from "./core/save";
 import { attachInput } from "./input/Input";
 import { BootScene } from "./scenes/BootScene";
+import { GameplayScene } from "./scenes/GameplayScene";
+import { PreviewScene } from "./scenes/PreviewScene";
 
 function dismissBootSplash(): void {
   const boot = document.getElementById("boot");
@@ -34,15 +38,31 @@ async function main(): Promise<void> {
 
   attachInput(game, game.app.canvas);
 
+  const save = SaveData.load();
+  game.difficulty = save.difficulty;
+  game.mode = save.mode;
+
+  // A browser will not let a page make a sound until the user has touched it,
+  // so the context stays suspended and every cue is a silent no-op until the
+  // first gesture unlocks it. Baking is spread across tasks from there.
+  const sound = new Audio({ muted: save.muted });
+  installUnlockGesture(sound, window);
+
   // Scenes register themselves here; Game never imports a scene module, which
   // keeps the dependency arrow pointing one way and avoids import cycles.
   game.registerScene("boot", (g) => new BootScene(g));
+  game.registerScene("game", (g) => new GameplayScene(g, save, sound));
+  // Development only: reachable by name from the screenshot harness, never
+  // linked to from the game itself.
+  game.registerScene("preview", (g) => new PreviewScene(g));
 
   game.start("boot");
   dismissBootSplash();
 
   // Expose for debugging on a real device, where there is no console to hand.
-  (window as unknown as { game?: Game }).game = game;
+  (window as unknown as { game?: Game; save?: SaveData; sound?: Audio }).game = game;
+  (window as unknown as { save?: SaveData }).save = save;
+  (window as unknown as { sound?: Audio }).sound = sound;
 }
 
 main().catch(showFatal);

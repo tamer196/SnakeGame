@@ -12,6 +12,8 @@
 import { Application, Container, Ticker } from "pixi.js";
 
 import * as C from "../core/config";
+import { ParticleSystem } from "../gfx/particles";
+import { PostChain } from "../gfx/post";
 import type { InputManager } from "../input/Input";
 import { Scene, type SceneEnterArgs, type SceneKey } from "./Scene";
 import { readSafeInsets, Viewport } from "./Viewport";
@@ -46,6 +48,16 @@ export class Game {
   readonly world = new Container();
   /** Above the world, unscaled: used by post-processing and debug. */
   readonly overlay = new Container();
+
+  /**
+   * Particles and screen feedback are owned by the shell, not by a scene.
+   *
+   * That is what makes them survive a scene change and what keeps them on real
+   * time: slow motion scales the simulation, but a shake or a spark shower
+   * finishes at its own pace, exactly as in the Python.
+   */
+  readonly particles = new ParticleSystem();
+  readonly post = new PostChain();
 
   readonly pointer: PointerState = {
     x: C.WINDOW_W * 0.5,
@@ -100,11 +112,19 @@ export class Game {
       resizeTo: window,
       powerPreference: "high-performance",
       preference: "webgl",
+      // The snake's cross-over contact shadow is drawn with the "subtract"
+      // blend mode, which is filter-based and reads the back buffer. On WebGL
+      // that silently falls back to normal blending unless this is on, and the
+      // overpass then reads as a flat overlap instead of a shadow.
+      useBackBuffer: true,
     });
     mount.appendChild(this.app.canvas);
 
     this.app.stage.addChild(this.world);
     this.app.stage.addChild(this.overlay);
+    // Scenes live inside the post chain, so every filter and the shake offset
+    // apply to the whole frame rather than per scene.
+    this.world.addChild(this.post.view);
 
     this.applyResize();
     window.addEventListener("resize", this.queueResize, { passive: true });
@@ -129,6 +149,11 @@ export class Game {
 
     this.world.scale.set(this.viewport.scale);
     this.world.position.set(this.viewport.offsetX, this.viewport.offsetY);
+
+    // The post chain frames the whole screen in design units, not just the
+    // 1280x720 box: on a wide phone the bars either side are part of the
+    // picture, and a CRT curve that stopped at the design edge would look cut.
+    this.post.setFrame(this.viewport.overscan);
 
     // A rotation can move a device between the phone and tablet schemes.
     this.input?.refreshScheme();
@@ -160,20 +185,22 @@ export class Game {
     while (this.stack.length) {
       const s = this.stack.pop()!;
       s.onExit();
-      this.world.removeChild(s.root);
+      this.post.scene.removeChild(s.root);
     }
     const scene = this.makeScene(key);
     this.stack.push(scene);
-    this.world.addChild(scene.root);
+    this.post.scene.addChild(scene.root);
     scene.onEnter(args);
     scene.onResize();
+    // A full scene change wipes; pushing an overlay (pause) does not.
+    this.post.fx.beginTransition();
   }
 
   pushScene(key: SceneKey | string, args?: SceneEnterArgs): void {
     const scene = this.makeScene(key);
     if (this.stack.includes(scene)) return;
     this.stack.push(scene);
-    this.world.addChild(scene.root);
+    this.post.scene.addChild(scene.root);
     scene.onEnter(args);
     scene.onResize();
   }
@@ -223,6 +250,17 @@ export class Game {
     for (let i = 0; i < this.stack.length; i++) {
       this.stack[i]!.root.visible = i >= firstVisible;
     }
+
+    // Both take real dt, after the scenes. Slow motion is a property of the
+    // simulation; a spark shower and a screen shake are not, and running them
+    // on the scaled clock would stretch every impact into treacle.
+    //
+    // The order also matters for a subtler reason: particles emitted by a scene
+    // this frame get no update before their first draw, so they appear exactly
+    // where they were born. That is the Python's behaviour and it reads as a
+    // sharper impact than starting them a frame along.
+    this.particles.update(dt);
+    this.post.update(dt);
   }
 
   start(startScene: SceneKey | string = "menu"): void {
@@ -234,6 +272,8 @@ export class Game {
     this.running = false;
     window.removeEventListener("resize", this.queueResize);
     window.removeEventListener("orientationchange", this.queueResize);
+    this.particles.destroy();
+    this.post.destroy();
     if (this.app) {
       this.app.ticker.remove(this.tick);
       this.app.destroy(true, { children: true });

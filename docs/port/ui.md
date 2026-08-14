@@ -49,7 +49,7 @@ trusting a number.**
 | 6 Cursor | ui.py:590-662 | no |
 | 7 HUD registry, anim, backdrop, odometer | ui.py:663-820 | no |
 | 8 HUD widgets | ui.py:821-959 | no |
-| **9 `draw_hud` layout** | **ui.py:960-1128** | **written separately - see §9** |
+| 9 `draw_hud` layout | ui.py:960-1128 | written directly from source, re-read in the same pass |
 
 The adversarial audit pass and the cross-section completeness critic that were planned for this
 document **did not run** - they were cut off by a spend limit partway through. So:
@@ -4899,3 +4899,263 @@ read are listed in §8.0.
    truncation" decision and the truncation is a pygame API artefact rather than authored intent, but
    it is the one place in this section where that decision is visible at a glance. If the perceptual
    check objects, the fix is a single `Math.trunc` at `ui/hud/LifeRow.ts`.
+## 9. HUD: `draw_hud` layout, every coordinate
+
+**Ground truth:** `snake/gfx/ui.py:960-1128` (`draw_hud`, `_draw_hud_impl`), plus
+`snake/scenes/gameplay.py::_hud_state` for the producing side. Sections 7 and 8 specify the
+widgets this one places (`_hud_backdrop`, `_draw_odometer`, `_draw_life_icon`,
+`_draw_effect_chip`, `_draw_combo`) and §2-§4 the primitives (`draw_text`, `draw_bar`,
+`_blit_glow`); this section owns only the **layout and the animation bookkeeping**.
+
+This section was written directly from the source rather than by an agent, and it is the one
+section of this document whose numbers were transcribed and re-read in the same pass.
+
+### 9.1 `draw_hud` - the wrapper (ui.py:960-989)
+
+Three duties, all worth keeping:
+
+| Duty | Code | Why |
+|---|---|---|
+| Clip to the strip | `strip = Rect(0, 0, C.WINDOW_W, C.HUD_H)`, intersected with any existing clip (`strip.clip(prev_clip)`), then `surface.set_clip(strip)` | The backdrop bloom and every chip halo are additive and would otherwise reach **~100 px down into the play field**, brightening the top of the arena. The clip makes HUD and arena strictly disjoint, so they can be drawn in either order. |
+| Restore the clip | `finally: surface.set_clip(prev_clip)`, itself wrapped in `try/except` | |
+| Tolerate a bad state dict | `state or {}`, and every read goes through `num()` / `state.get` with a default | `draw_hud` ignores unknown keys and survives missing ones. §8.1 of integration.md requires the port keep this tolerance. |
+
+> **Quirk - ported, but not as-is.** The whole body is wrapped in a bare `except Exception:
+> pass` (ui.py:983-984). Any error anywhere in the HUD silently draws **nothing** and the game
+> carries on. That is shipped behaviour, but a silent blank HUD is a bug that hides bugs. Port
+> recommendation: keep the clip and the missing-key tolerance, and let exceptions propagate in
+> development while catching-and-logging in production. Do not copy a silent `pass`.
+
+**Clipping in Pixi.** The strip is a rectangular mask on the HUD root container, the same
+device `GameplayScene` already uses for the arena (`arenaMask`). Because the strip is fixed at
+`(0, 0, 1280, 78)` in design space, the mask is built once, never per frame.
+
+### 9.2 Where `t` and `dt` come from - read this before touching the animation
+
+`draw_hud(surface, game, state, theme, t)` is called with **`game.time`** - unscaled, real
+elapsed time (integration.md §8, layer 9: "**unscaled `game.time`**"). The HUD then derives its
+own `dt` by differencing that clock:
+
+```python
+dt = clamp(t - anim.last_t, 0.0, 0.1)     # ui.py:996
+anim.last_t = t                            # ui.py:997
+```
+
+Consequences the port must preserve:
+
+- The HUD is a **real-dt consumer**. Slow motion (`fx.time_scale()`) does not stretch the score
+  roll-up, the combo pop or the boost bar. This is the deliberate "hit-stop with live UI" split
+  of integration.md §10 - assert it in review.
+- The clamp is **0.1 s**, not `MAX_DT` (0.05). A stall longer than 100 ms freezes the HUD
+  animation for that frame rather than jumping it.
+- `dt` is computed at *draw* time, not passed in. In the port the HUD view's `update(state, t)`
+  should difference the same `game.time` value, so a frame that draws twice cannot double-step
+  the animation.
+
+### 9.3 State reads and their defaults (ui.py:999-1018)
+
+`num(key, default)` coerces to `float` and falls back on any exception or `None`.
+
+| Local | Source key | Default | Post-processing |
+|---|---|---|---|
+| `score` | `score` | 0 | `int()` |
+| `highscore` | `highscore` | 0 | `int()` |
+| `goal` | `goal_food` | 1 | `max(1, int(...))` - never divides by zero |
+| `eaten` | `food_eaten` | 0 | `int()` |
+| `lives` | `lives` | `C.START_LIVES` (3) | `int()` |
+| `combo` | `combo` | 0 | `int()` |
+| `boost` | `boost` | 0 | raw float (stamina, not a fraction) |
+| `boost_max` | `boost_max` | `C.SNAKE_BOOST_MAX` (100) | `max(1.0, ...)` |
+| `level_index` | `level_index` | 0 | `int()`, displayed `+1` |
+| `level_name` | `level_name` | `theme.name` | `str(... or "")` - falls back to the **theme name**, then to empty |
+
+`accent`, `accent2`, `dim` are `_q(theme.accent / .accent2 / .text_dim)`. `_q` is an int-cast
+for hashability only (§1.4) and never alters a legal channel value; in TS these are just
+`theme.accent`, `theme.accent2`, `theme.textDim`.
+
+The state contract in integration.md §8.1 also lists `difficulty`, `difficulty_label`,
+`difficulty_color`, `mode`, `chapter`, `chapter_title` and `beat_title`. **`_draw_hud_impl`
+reads none of them.** They are produced by `_hud_state` and consumed elsewhere (the READY card,
+§9 of integration.md). Do not add HUD elements for them.
+
+### 9.4 Animation bookkeeping (ui.py:1020-1040)
+
+Runs before any drawing, in this exact order. All four "pop" values are 0..1 and decay linearly;
+only the score uses an exponential chase.
+
+| Field | Trigger | Rise | Decay |
+|---|---|---|---|
+| `score_hit` | `score > score_disp + 0.5` | `min(1, score_hit + dt * 4.0)` | `max(0, score_hit - dt * 2.2)`, applied every frame **after** the rise |
+| `score_disp` | always | `score_disp += (score - score_disp) * (1 - exp(-11.0 * dt))` | snaps: `if abs(score - score_disp) < 0.6: score_disp = score` |
+| `combo_pop` | `combo > prev_combo` | set to `1.0` | `- dt * 3.0` |
+| `food_pop` | `eaten > prev_food` | set to `1.0` | `- dt * 2.6` |
+| `life_pop` | `prev_lives >= 0 and lives != prev_lives` | set to `1.0` | `- dt * 2.4` |
+
+Three details that are easy to lose:
+
+1. **`score_disp` uses a true exponential chase**, `1 - exp(-11·dt)`, not the `min(1, dt·k)`
+   approximation used for the snake's bank (integration.md §10). It is therefore frame-rate
+   independent and must **not** be "simplified" to a lerp.
+2. **`life_pop` triggers on `!=`, not `<`** - gaining a life pops the row exactly as losing one
+   does. The `prev_lives >= 0` guard exists so the first frame after construction
+   (`prev_lives = -1`) does not pop.
+3. `prev_combo` / `prev_food` / `prev_lives` are written every frame regardless of the branch.
+
+`_hud_anim(game)` caches this record **on the game object** in Python (§7). The port puts it on
+the HUD view object; do not monkey-patch `Game`.
+
+### 9.5 The complete coordinate table
+
+Design pixels within the strip `(0, 0, 1280, 78)`. Draw order is top to bottom of this table.
+"tiny" = `_font(fonts, "tiny", 14)`; see §0.5.1 for the shim's argument-discarding quirk - with
+a real FontBook these resolve to the **named ladder entry**, and the numeric argument is dead.
+
+| # | Element | x | y | Anchor | Font | Colour | Condition |
+|---|---|---|---|---|---|---|---|
+| 1 | Backdrop | 0 | 0 | top-left | - | `_hud_backdrop(theme)` (§7) | always |
+| 2 | `"SCORE"` | 20 | 6 | left | tiny | `dim` | always |
+| 3 | `"BEST {n:,}"` where `n = max(highscore, score)` | 250 | 6 | **right** | tiny | `shade(dim, 0.85)` | always |
+| 4 | Score heat glow | 96 | 46 | centre | - | `UI_GOLD`, r 62, intensity `0.20 + 0.5·score_hit` | `score_hit > 0.01` |
+| 5 | Odometer, value `int(score_disp + 0.5)` | 20 | 28 | top-left | `_font(fonts, "display", 34)` | `lerp(UI_WHITE, UI_GOLD, _step(0.35 + 0.5·score_hit, 5))` | always |
+| 6 | `"LVL {level_index+1:02d}"` | 272 | 5 | left | tiny | `accent2` | always |
+| 7 | `level_name.upper()` | 272 | 22 | left | `_font(fonts, "ui", 24, True)` | `theme.text` | always |
+| 8 | Goal bar | rect `(272, 58, 250, 9)` | | | - | `goal_col` (below) | always |
+| 9 | `"{min(eaten, goal)} / {goal}"` | 532 | 53 | left | tiny | `lerp(dim, UI_WHITE, _step(0.35 + 0.5·food_pop, 4))` | always |
+| 10 | `"LIVES"` | 636 | 5 | left | tiny | `dim` | always |
+| 11 | Life icons, `i = 0..icons-1` | `654 + i·pitch` | 44 | centre | - | §8, `alive = i < lives` | always |
+| 12 | `"+{slots-6}"` | `658 + icons·pitch` | 37 | left | tiny | `dim` | `slots > 6` |
+| 13 | Combo badge | 812 | 40 | centre | §8 | §8 | `combo > 1` |
+| 14 | `"COMBO"` | 812 | 33 | **centre** | tiny | `shade(dim, 0.7)` | `combo <= 1` |
+| 15 | `"BOOST"` | 900 | 7 | left | tiny | `label_col` (below) | always |
+| 16 | Boost bar | rect `(958, 12, 222, 12)` | | | - | `boost_col` (below) | always |
+| 17 | Boost glow | 1069 | 18 | centre | - | `boost_col`, r 90, intensity 0.35 | boosting **and** `frac > 0` |
+| 18 | Effect chips, `i = 0..n-1` | `start + i·38` | 50 | centre | §8 | §8 | `n >= 1` |
+| 19 | `"NO ACTIVE POWER-UPS"` | 1260 | 45 | **right** | tiny | `shade(dim, 0.6)` | no effects |
+| 20 | Strip bloom | 640 | 76 | centre | - | `accent`, r 150, intensity 0.10 | always |
+
+Row 3's `{:,}` is a **thousands separator**. `max(highscore, score)` means BEST tracks the live
+score the moment it passes the stored best, rather than waiting for the run to end.
+
+Row 20 is `_blit_glow(C.WINDOW_W * 0.5, C.HUD_H - 2, 150, accent, 0.10)` - it ties the strip to
+the arena border below, and it is the main reason the clip in §9.1 exists.
+
+### 9.6 Derived colours and geometry
+
+**Goal bar** (ui.py:1065-1068):
+
+```
+goal_col = lerp(accent, UI_GOOD, _step(eaten / goal, 8))
+if food_pop > 0.01:
+    goal_col = lerp(goal_col, UI_WHITE, _step(food_pop * 0.8, 4))
+draw_bar(rect, eaten / goal, goal_col)          # frac is NOT clamped here - draw_bar clamps
+```
+
+**Lives row** (ui.py:1074-1088):
+
+```
+shown_lives = max(lives, 0)
+slots       = max(C.START_LIVES, shown_lives)    # 3 minimum, grows if lives were gained
+max_icons   = 6
+icons       = min(slots, max_icons)
+span        = 140.0
+pitch       = min(34.0, span / max(1, icons))    # 34 for <= 4 icons, then 28.0 at 5, 23.33 at 6
+pop_i       = life_pop if i == shown_lives else 0.0
+_draw_life_icon(654 + i * pitch, 44, theme, alive, t, phase = i * 1.7, pop = pop_i)
+```
+
+The pitch tightens rather than the row growing, because the icons must stay clear of the combo
+badge at `x = 812`. The `pop` is applied to the **one slot at index `shown_lives`** - the slot
+that just emptied (or just filled), not the whole row. Note the `+n` overflow label starts at
+`658`, four pixels right of the icon origin `654`.
+
+**Boost** (ui.py:1097-1109):
+
+```
+frac      = clamp(boost / boost_max, 0, 1)
+low       = frac < (C.SNAKE_BOOST_MIN_TO_START / boost_max)      # 12 / 100 = 0.12
+boost_col = UI_BAD if low else lerp(UI_WARN, accent2, _step(frac, 6))
+label_col = lerp(dim, boost_col, _step(0.5 + 0.5 * pulse(t, 6.0), 4) if low else 0.4)
+boosting  = bool(game.mouse_buttons.get(3)) and frac > 0.0
+```
+
+`low` is the "cannot start a boost" threshold, not "empty": below 12 % the bar turns `UI_BAD`
+and the **label pulses** at 6 rad/s through `_step(..., 4)`, while above it the label sits at a
+flat 0.4 blend. `mouse_buttons.get(3)` is the **right** mouse button - in the port that is
+`game.pointer.boost` (integration.md §11 records the mapping, and it is a superset: touch boost
+sets the same flag).
+
+**Effect chips** (ui.py:1112-1125):
+
+```
+eff_list = [(str(k), float(v)) for k, v in list(effects)[:6]]    # hard cap 6, silently truncated
+pitch    = 38
+right    = C.WINDOW_W - 20                                        # 1260
+start    = right - pitch * len(eff_list) + pitch * 0.5
+x_i      = start + i * pitch
+```
+
+The block is right-aligned with **newest on the right**; `+ pitch * 0.5` converts the
+right edge into the centre of the last chip. Ordering is whatever `effects` arrives in - §8.1
+of integration.md says `effects.items()` is urgency-sorted, and that sort happens on the
+*producing* side, in the effect stack, not here. The cap of 6 is silent: a seventh effect is
+simply not drawn.
+
+### 9.7 `_step` on colour blends - do **not** optimise this away
+
+Six of the colour expressions above run their blend factor through `_step(x, n)` (§1.4), which
+quantises to `n` levels. §1.4 explains that the *cache-key* quantisers become unnecessary in the
+port because tint is free. **These are not those.** `_step` here is applied to a `lerp_color`
+factor, so it produces visible banding in the ramp - the score colour moves through 5 discrete
+steps as heat builds, the goal bar through 8 as it fills. That stepping is part of the look.
+Keep `_step` on every one of: rows 5, 8, 9, 16 and the `label_col` / `goal_col` expressions.
+
+### 9.8 The TS view
+
+`web/src/ui/hud/Hud.ts` - one persistent view object, built once, mutated per frame:
+
+```
+Hud
+  root: Container            (mask = the 1280x78 strip rect, built once)
+  backdrop: Sprite           §7
+  scoreCaption, bestLabel: Text
+  scoreGlow: Sprite          visible only while score_hit > 0.01
+  odometer: Odometer         §7
+  lvlLabel, levelName: Text
+  goalBar: Bar               §4
+  goalLabel: Text
+  livesLabel: Text
+  lifeRow: LifeIcon[6]       §8, pooled - visibility and pitch set per frame
+  overflowLabel: Text
+  combo: ComboBadge          §8
+  comboLabel: Text           the "COMBO" placeholder, swapped with the badge
+  boostLabel: Text
+  boostBar: Bar              §4
+  boostGlow: Sprite
+  chips: EffectChip[6]       §8, pooled
+  noChipsLabel: Text
+  stripBloom: Sprite
+  anim: HudAnim              §7 - lives here, NOT on Game
+```
+
+`update(state, t)` does §9.2's dt derivation, then §9.4's bookkeeping, then writes positions,
+tints and alphas. **A `Text`'s `.text` is assigned only when the string actually changes** -
+seven of the nine labels here are static or change rarely, and rasterising glyphs every frame is
+the one Python cost worth not copying. The four that do change (`BEST n`, `eaten / goal`,
+`+n`, and the odometer's digits) should each keep their last string in a field and compare.
+
+Pool sizes are fixed at 6 for both the life row and the chips, matching `max_icons` and the
+`[:6]` truncation, so no allocation happens on a draw path.
+
+### 9.9 What a test can cover
+
+| Testable in vitest (pure) | Perceptual only (vs `captures/08-gameplay-ready.png`) |
+|---|---|
+| `score_disp` chase and the 0.6 snap | Backdrop gradient and the strip bloom |
+| Every pop's rise and decay rate | Odometer digit roll |
+| `pitch` for 1..6+ icons; the `+n` threshold | Life-icon and chip artwork |
+| `low` threshold at exactly `frac = 0.12` | Colour banding from `_step` |
+| Chip `start` / `x_i` for n = 1..6, and the silent truncation at 7 | Text metrics and their alignment |
+| `max(highscore, score)` and the `{:,}` formatting | |
+| Missing / null / unknown state keys not throwing | |
+
+---

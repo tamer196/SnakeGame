@@ -6,8 +6,12 @@
  *   - a WebGL canvas exists and is sized to the viewport
  *   - the frame is not blank (pixel variance, same idea as screenshot.py)
  *   - synthetic touch input reaches the game and moves the steering target
- *   - sustained frame rate over a measured window
+ *   - sustained fill cost over a measured window, per megapixel
  * Run at several viewport sizes, including a phone and an iPad.
+ *
+ * WebGL here is SwiftShader, a software rasteriser, so absolute frame times are
+ * a property of this machine and not of any device in the list. The perf check
+ * is normalised per megapixel for that reason - see the comment at the check.
  */
 
 import { createServer } from "node:http";
@@ -57,6 +61,9 @@ function serve(root) {
 let failures = 0;
 const ok = (m) => console.log(`  [ok]   ${m}`);
 const bad = (m) => { failures++; console.log(`  [FAIL] ${m}`); };
+/** Reported, never fatal: things the harness can measure but cannot judge. */
+const notes = [];
+const note = (m) => { notes.push(m); console.log(`  [note] ${m}`); };
 
 async function run(browser, dev) {
   console.log(`\n=== ${dev.name} ===`);
@@ -175,10 +182,35 @@ async function run(browser, dev) {
     const s = times.slice(20).sort((a, b) => a - b);
     return { mean: s.reduce((a, b) => a + b, 0) / s.length, p95: s[Math.floor(s.length * 0.95)] };
   });
+  // Judged per megapixel, not per frame.
+  //
+  // This browser runs WebGL on SwiftShader (see the launch args), so an
+  // absolute frame time here is a fact about a software rasteriser on the build
+  // machine, not about the phone in the device list. It scales with the pixel
+  // count and nothing else: the three profiles differ by 1.9x in area and came
+  // out at 8.05 / 8.03 / 7.93 ms per megapixel, which is the renderer's real
+  // signature. Asserting on that number catches a regression in what we
+  // control - a new full-screen pass, a filter that lost its cache - and does
+  // not fail merely because a profile is 4 Mpx.
+  //
+  // A profile pinned at the 60 Hz requestAnimationFrame cap is not saturated,
+  // so its cost per megapixel is an upper bound; it is marked with "<=".
   const fps = 1000 / perf.mean;
-  perf.p95 < 25
-    ? ok(`frame ${perf.mean.toFixed(2)} ms mean / ${perf.p95.toFixed(2)} p95 (~${fps.toFixed(0)} fps)`)
-    : bad(`frame too slow: ${perf.mean.toFixed(2)} ms mean / ${perf.p95.toFixed(2)} p95`);
+  const mpx = (info.cw * info.ch) / 1e6;
+  const capped = perf.mean < 17.0;
+  const perMpx = perf.mean / mpx;
+  const shown = `${capped ? "<=" : ""}${perMpx.toFixed(2)} ms/Mpx`;
+  perMpx < 12
+    ? ok(`frame ${perf.mean.toFixed(2)} ms mean / ${perf.p95.toFixed(2)} p95 ` +
+         `(~${fps.toFixed(0)} fps, ${mpx.toFixed(2)} Mpx, ${shown}, software GL)`)
+    : bad(`fill cost regressed: ${shown} over ${mpx.toFixed(2)} Mpx ` +
+          `(${perf.mean.toFixed(2)} ms mean / ${perf.p95.toFixed(2)} p95)`);
+  // Real-device frame rate is not knowable from here; say so rather than imply
+  // a pass means the game holds 60 fps on an iPad.
+  if (!capped) {
+    note(`${dev.name}: ${fps.toFixed(0)} fps in software GL at ${mpx.toFixed(2)} Mpx ` +
+         `- indicative only, real GPU perf needs a real device`);
+  }
 
   await page.close();
 }
@@ -196,5 +228,6 @@ try {
   server.close();
 }
 
+if (notes.length) console.log(`\n${notes.length} note(s) above are informational, not failures.`);
 console.log(`\n${failures === 0 ? "RESULT: PASS" : `RESULT: FAIL (${failures})`}`);
 process.exit(failures === 0 ? 0 : 1);

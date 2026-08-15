@@ -26,6 +26,7 @@ import {
 } from "../core/palette";
 import { Bar } from "../ui/bar";
 import { Button, type ButtonStyle } from "../ui/Button";
+import { Cursor } from "../ui/Cursor";
 import { Panel } from "../ui/panel";
 import { Label } from "../ui/text";
 
@@ -37,6 +38,7 @@ export class UiKitScene extends Scene {
   private readonly bars: Array<{ bar: Bar; frac: number; color: readonly [number, number, number] }> =
     [];
   private readonly buttons: Button[] = [];
+  private readonly cursors: Array<{ cursor: Cursor; x: number; y: number; held: boolean }> = [];
   private built = false;
 
   override onEnter(): void {
@@ -145,6 +147,27 @@ export class UiKitScene extends Scene {
       this.root.addChild(cap);
     }
 
+    // The reticle is only ~15 px across at 1:1, which is too small to check by
+    // eye, so it is magnified here: three ticks sweeping one way, a faint inner
+    // ring sweeping the other, four spurs, and a white centre dot.
+    for (const [cx, held] of [
+      [760, false],
+      [1040, true],
+    ] as const) {
+      const cursor = new Cursor();
+      cursor.root.scale.set(5);
+      // The container scales about its origin, so place it by counter-offset.
+      cursor.root.position.set(cx - 0 * 5, 0);
+      this.cursors.push({ cursor, x: 0, y: 30, held });
+      this.root.addChild(cursor.root);
+
+      const cap = new Label(fonts, fonts.tiny);
+      cap.set(held ? "reticle x5, held" : "reticle x5, idle");
+      cap.setColor(t.textDim);
+      cap.place(cx, 220, "center");
+      this.root.addChild(cap);
+    }
+
     // One button per style, plus a forced-hover and a disabled variant, so the
     // cold/hot cross-fade and the disabled transform can both be seen at once.
     const buttonSpecs: Array<[string, ButtonStyle, number, boolean]> = [
@@ -181,5 +204,13 @@ export class UiKitScene extends Scene {
     const now = performance.now();
     for (const { bar, frac, color } of this.bars) bar.set(frac, color, now);
     for (const b of this.buttons) b.draw(this.theme, this.game.time);
+    for (const { cursor, x, y, held } of this.cursors) {
+      cursor.draw({
+        time: this.game.time,
+        levelIndex: 0,
+        pointer: { x, y, down: held, touch: false },
+        trail: [],
+      });
+    }
   }
 }

@@ -13,6 +13,7 @@ import { Application, Container, Ticker } from "pixi.js";
 
 import * as C from "../core/config";
 import { FontBook, fontsReady } from "../gfx/fonts";
+import { Cursor } from "../ui/Cursor";
 import { ParticleSystem } from "../gfx/particles";
 import { PostChain } from "../gfx/post";
 import type { InputManager } from "../input/Input";
@@ -85,6 +86,15 @@ export class Game {
    * rather than passed at paint time.
    */
   readonly fonts = new FontBook();
+
+  /**
+   * The reticle, drawn by the shell above every scene.
+   *
+   * It lives inside the post chain rather than over it, so it picks up the
+   * bloom and the CRT curve with everything else - which is what the Python
+   * does by painting it onto the canvas before the frame is composited.
+   */
+  cursor: Cursor | null = null;
 
   readonly pointer: PointerState = {
     x: C.WINDOW_W * 0.5,
@@ -164,6 +174,9 @@ export class Game {
     // apply to the whole frame rather than per scene.
     this.world.addChild(this.post.view);
 
+    this.cursor = new Cursor();
+    this.post.scene.addChild(this.cursor.root);
+
     this.applyResize();
     window.addEventListener("resize", this.queueResize, { passive: true });
     window.addEventListener("orientationchange", this.queueResize, { passive: true });
@@ -233,6 +246,8 @@ export class Game {
     const scene = this.makeScene(key);
     this.stack.push(scene);
     this.post.scene.addChild(scene.root);
+    // Re-adding moves it back to the end, so the reticle stays above the scene.
+    if (this.cursor) this.post.scene.addChild(this.cursor.root);
     scene.onEnter(args);
     scene.onResize();
     // A full scene change wipes; pushing an overlay (pause) does not.
@@ -244,6 +259,8 @@ export class Game {
     if (this.stack.includes(scene)) return;
     this.stack.push(scene);
     this.post.scene.addChild(scene.root);
+    // Re-adding moves it back to the end, so the reticle stays above the scene.
+    if (this.cursor) this.post.scene.addChild(this.cursor.root);
     scene.onEnter(args);
     scene.onResize();
   }
@@ -304,6 +321,13 @@ export class Game {
     // sharper impact than starting them a frame along.
     this.particles.update(dt);
     this.post.update(dt);
+
+    this.cursor?.draw({
+      time: this.time,
+      levelIndex: this.levelIndex,
+      pointer: this.pointer,
+      trail: this.pointerTrail,
+    });
 
     // Drained by whichever scenes wanted them; anything left is stale.
     this.uiEvents.length = 0;

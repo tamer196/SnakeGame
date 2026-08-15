@@ -52,6 +52,16 @@ export interface UiPointerEvent {
   button: number;
 }
 
+/**
+ * One key edge. `key` is the `KeyboardEvent.key` value, lower-cased for
+ * printable characters so "P" and "p" are the same binding.
+ */
+export interface UiKeyEvent {
+  type: "down" | "up";
+  key: string;
+  repeat: boolean;
+}
+
 export interface GameOptions {
   /** Mount point. Defaults to #app. */
   container?: HTMLElement;
@@ -110,6 +120,10 @@ export class Game {
    * their buttons and cleared at the end of the tick.
    */
   readonly uiEvents: UiPointerEvent[] = [];
+  /** Key edges since the last frame, drained and cleared like {@link uiEvents}. */
+  readonly keyEvents: UiKeyEvent[] = [];
+  /** Keys currently held, for anything that wants a level rather than an edge. */
+  readonly keysDown = new Set<string>();
   /** Set by attachInput(); absent in headless tests. */
   input?: InputManager;
 
@@ -331,6 +345,7 @@ export class Game {
 
     // Drained by whichever scenes wanted them; anything left is stale.
     this.uiEvents.length = 0;
+    this.keyEvents.length = 0;
   }
 
   start(startScene: SceneKey | string = "menu"): void {

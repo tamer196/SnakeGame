@@ -29,6 +29,25 @@ import type { Game } from "../app/Game";
 
 export type ControlScheme = "mouse" | "drag" | "offset";
 
+/**
+ * Keys the game binds, whose browser default is suppressed.
+ *
+ * Deliberately a short list rather than a blanket `preventDefault`: swallowing
+ * everything breaks refresh, devtools and tab switching, and the game only ever
+ * reads these.
+ */
+const BOUND_KEYS: ReadonlySet<string> = new Set([
+  " ",
+  "ArrowUp",
+  "ArrowDown",
+  "ArrowLeft",
+  "ArrowRight",
+  "Enter",
+  "Escape",
+  "Tab",
+  "Backspace",
+]);
+
 interface TouchRec {
   id: number;
   /** Anchor in design space, where the drag began. */
@@ -95,6 +114,8 @@ export class InputManager {
     const cancel = (e: PointerEvent) => this.onUp(e);
     const menu = (e: Event) => e.preventDefault();
     const blur = () => this.reset();
+    const keyDown = (e: KeyboardEvent) => this.onKey(e, true);
+    const keyUp = (e: KeyboardEvent) => this.onKey(e, false);
 
     el.addEventListener("pointerdown", down, opts);
     window.addEventListener("pointermove", move, opts);
@@ -103,6 +124,8 @@ export class InputManager {
     // Right-click boosts, so the context menu must never appear.
     el.addEventListener("contextmenu", menu);
     window.addEventListener("blur", blur);
+    window.addEventListener("keydown", keyDown);
+    window.addEventListener("keyup", keyUp);
 
     this.detachers = [
       () => el.removeEventListener("pointerdown", down),
@@ -111,6 +134,8 @@ export class InputManager {
       () => window.removeEventListener("pointercancel", cancel),
       () => el.removeEventListener("contextmenu", menu),
       () => window.removeEventListener("blur", blur),
+      () => window.removeEventListener("keydown", keyDown),
+      () => window.removeEventListener("keyup", keyUp),
     ];
   }
 
@@ -160,6 +185,24 @@ export class InputManager {
     }
     this.game.pointer.down = true;
     this.updateBoost();
+  }
+
+  /**
+   * Keyboard edges, queued for scenes alongside the pointer ones.
+   *
+   * Printable keys are lower-cased so "P" and "p" are one binding, matching
+   * pygame's keycodes, which are case-independent. The browser's own shortcuts
+   * are left alone: only the keys the game actually binds are swallowed, so
+   * F5, Ctrl-T and the like keep working during development.
+   */
+  private onKey(e: KeyboardEvent, isDown: boolean): void {
+    const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    if (isDown) this.game.keysDown.add(key);
+    else this.game.keysDown.delete(key);
+    this.game.keyEvents.push({ type: isDown ? "down" : "up", key, repeat: e.repeat });
+
+    // Space and the arrows scroll the page; the game binds both.
+    if (BOUND_KEYS.has(key) && !e.ctrlKey && !e.metaKey && !e.altKey) e.preventDefault();
   }
 
   private onMove(e: PointerEvent): void {

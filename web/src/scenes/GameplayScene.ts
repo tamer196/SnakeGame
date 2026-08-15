@@ -40,6 +40,12 @@ import {
   type FrameClocks,
 } from "../gfx/entities";
 import { SnakeRenderer } from "../gfx/SnakeRenderer";
+import { Button } from "../ui/Button";
+import { Hud } from "../ui/hud/Hud";
+import { SCENES } from "../app/Scene";
+
+/** `gameplay.py:133`. The pause button's rect, inside the HUD strip. */
+const PAUSE_RECT = { x: 886, y: 32, w: 70, h: 38 };
 import { GameplayWorld, type Popup } from "../game/GameplayWorld";
 import type {
   BurstOptions,
@@ -80,6 +86,11 @@ export class GameplayScene extends Scene implements GameplayPresenter {
   private readonly snakeView = new SnakeRenderer();
 
   private readonly popupViews: PopupView[] = [];
+  /** Above the arena and outside its clip; it owns a clip of its own. */
+  private readonly hud: Hud;
+  private readonly pauseButton: Button;
+  private readonly pauseLayer = new Container();
+  private readonly pauseClip = new Graphics();
   private theme: Theme;
   private entered = false;
 
@@ -103,6 +114,23 @@ export class GameplayScene extends Scene implements GameplayPresenter {
     );
     this.root.addChild(this.arenaLayer);
     this.arenaLayer.addChild(this.popupLayer);
+
+    // Added last so it stays above the arena; rebuildBackground only ever
+    // inserts at the front, so this ordering survives a level change.
+    this.hud = new Hud(game.fonts);
+    this.root.addChild(this.hud.root);
+
+    // The pause button lives in the HUD strip and its 18 px halo is clipped to
+    // it - the rect reaches y = 70, so an unclipped glow would spill onto the
+    // arena border below.
+    this.pauseButton = new Button(game.fonts, PAUSE_RECT, "PAUSE", {
+      style: "ghost",
+      font: game.fonts.tiny,
+    });
+    this.pauseClip.rect(0, 0, C.WINDOW_W, C.HUD_H).fill({ color: 0xffffff });
+    this.pauseLayer.addChild(this.pauseClip, this.pauseButton.root);
+    this.pauseButton.root.mask = this.pauseClip;
+    this.root.addChild(this.pauseLayer);
   }
 
   // -------------------------------------------------------------------
@@ -135,6 +163,9 @@ export class GameplayScene extends Scene implements GameplayPresenter {
     );
 
     this.releasePopups();
+    // Scene instances are reused, so without this the odometer would roll up
+    // from the previous level's score.
+    this.hud.reset();
     this.entered = true;
   }
 
@@ -185,6 +216,24 @@ export class GameplayScene extends Scene implements GameplayPresenter {
 
   override update(dt: number): void {
     const pointer = this.game.pointer;
+
+    // Events before the update, matching the Python's pump-then-update order:
+    // a move must be able to write `hovered` before `justEntered` is computed,
+    // and a tap can press and release inside one frame.
+    let pauseClicked = false;
+    for (const ev of this.game.uiEvents) {
+      if (this.pauseButton.handlePointer(ev)) pauseClicked = true;
+    }
+    for (const ev of this.game.keyEvents) {
+      if (ev.type === "down" && !ev.repeat && (ev.key === "Escape" || ev.key === "p")) {
+        pauseClicked = true;
+      }
+    }
+    // Real dt: the button is chrome, and slow motion must not slow it down.
+    this.pauseButton.update(dt, pointer);
+    this.pauseButton.draw(this.theme, this.game.time);
+    if (pauseClicked) this.pause();
+
     this.world.update(dt, pointer);
 
     const clocks: FrameClocks = { t: this.world.clockT, hazardT: this.world.hazardT };
@@ -209,6 +258,26 @@ export class GameplayScene extends Scene implements GameplayPresenter {
     }
 
     this.syncPopups();
+
+    // Real time, not the scaled clock: slow motion is for the simulation, and
+    // the wall clock separately drives the bars' tip bloom.
+    this.hud.update(
+      { ...this.world.hudState(this.game.time), boosting: pointer.boost },
+      this.theme,
+      this.game.time,
+      performance.now(),
+    );
+  }
+
+  /**
+   * Push the pause overlay.
+   *
+   * Guarded on registration so the button is live from the moment PauseScene
+   * lands, and inert rather than throwing until then.
+   */
+  private pause(): void {
+    if (!this.game.registeredScenes().includes(SCENES.PAUSE)) return;
+    this.game.pushScene(SCENES.PAUSE);
   }
 
   // -------------------------------------------------------------------

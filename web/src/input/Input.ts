@@ -131,6 +131,7 @@ export class InputManager {
       const p = this.toDesign(e);
       this.setPointer(p.x, p.y, false);
       this.game.pointer.down = this.mouseButtons.has(0);
+      this.game.uiEvents.push({ type: "down", x: p.x, y: p.y, button: e.button });
       return;
     }
 
@@ -150,6 +151,8 @@ export class InputManager {
       startedAt: performance.now(),
     };
     this.touches.set(e.pointerId, rec);
+    // Touch has no buttons; the UI kit only ever looks at button 0.
+    this.game.uiEvents.push({ type: "down", x: p.x, y: p.y, button: 0 });
 
     if (this.steerId === null && this.acceptsSteer(p.x)) {
       this.steerId = e.pointerId;
@@ -163,6 +166,7 @@ export class InputManager {
     if (e.pointerType === "mouse") {
       const p = this.toDesign(e);
       this.setPointer(p.x, p.y, false);
+      this.game.uiEvents.push({ type: "move", x: p.x, y: p.y, button: e.button });
       return;
     }
     const rec = this.touches.get(e.pointerId);
@@ -170,6 +174,7 @@ export class InputManager {
     e.preventDefault();
 
     const p = this.toDesign(e);
+    this.game.uiEvents.push({ type: "move", x: p.x, y: p.y, button: 0 });
     rec.vx = p.x - rec.x;
     rec.vy = p.y - rec.y;
     rec.x = p.x;
@@ -182,8 +187,15 @@ export class InputManager {
     if (e.pointerType === "mouse") {
       this.mouseButtons.delete(e.button);
       this.game.pointer.down = this.mouseButtons.has(0);
+      const p = this.toDesign(e);
+      this.game.uiEvents.push({ type: "up", x: p.x, y: p.y, button: e.button });
       this.updateBoost();
       return;
+    }
+    const lift = this.touches.get(e.pointerId);
+    if (lift) {
+      // The last known touch point: a lifted pointer reports where it left.
+      this.game.uiEvents.push({ type: "up", x: lift.x, y: lift.y, button: 0 });
     }
     this.touches.delete(e.pointerId);
     if (this.steerId === e.pointerId) {

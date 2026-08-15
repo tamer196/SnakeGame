@@ -34,6 +34,23 @@ export interface PointerState {
   touch: boolean;
 }
 
+/**
+ * One pointer edge, in design space, for the UI kit.
+ *
+ * `game.pointer` carries the *level* - where the pointer is and whether it is
+ * down - which is all the simulation needs. Buttons need the edges: a tap can
+ * press and release inside one frame, and the hover cue depends on a move being
+ * applied before that frame's update. Python gets both from its event pump; on
+ * the web the level is polled, so the edges are queued alongside it.
+ */
+export interface UiPointerEvent {
+  type: "move" | "down" | "up";
+  x: number;
+  y: number;
+  /** Mouse button index; synthesised as 0 for touch. */
+  button: number;
+}
+
 export interface GameOptions {
   /** Mount point. Defaults to #app. */
   container?: HTMLElement;
@@ -78,6 +95,11 @@ export class Game {
   };
   /** Recent pointer positions, for the cursor comet trail. */
   readonly pointerTrail: Array<{ x: number; y: number }> = [];
+  /**
+   * Pointer edges since the last frame, drained by scenes before they update
+   * their buttons and cleared at the end of the tick.
+   */
+  readonly uiEvents: UiPointerEvent[] = [];
   /** Set by attachInput(); absent in headless tests. */
   input?: InputManager;
 
@@ -282,6 +304,9 @@ export class Game {
     // sharper impact than starting them a frame along.
     this.particles.update(dt);
     this.post.update(dt);
+
+    // Drained by whichever scenes wanted them; anything left is stale.
+    this.uiEvents.length = 0;
   }
 
   start(startScene: SceneKey | string = "menu"): void {

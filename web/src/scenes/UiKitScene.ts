@@ -25,6 +25,7 @@ import {
   type Theme,
 } from "../core/palette";
 import { Bar } from "../ui/bar";
+import { Button, type ButtonStyle } from "../ui/Button";
 import { Panel } from "../ui/panel";
 import { Label } from "../ui/text";
 
@@ -35,6 +36,7 @@ export class UiKitScene extends Scene {
   private readonly panels: Panel[] = [];
   private readonly bars: Array<{ bar: Bar; frac: number; color: readonly [number, number, number] }> =
     [];
+  private readonly buttons: Button[] = [];
   private built = false;
 
   override onEnter(): void {
@@ -142,11 +144,42 @@ export class UiKitScene extends Scene {
       cap.place(560 + i * 172 + 80, 578, "center");
       this.root.addChild(cap);
     }
+
+    // One button per style, plus a forced-hover and a disabled variant, so the
+    // cold/hot cross-fade and the disabled transform can both be seen at once.
+    const buttonSpecs: Array<[string, ButtonStyle, number, boolean]> = [
+      ["PRIMARY", "primary", 0, true],
+      ["PRIMARY", "primary", 1, true],
+      ["GHOST", "ghost", 0, true],
+      ["DANGER", "danger", 1, true],
+      ["TILE", "tile", 0, true],
+      ["DISABLED", "primary", 0, false],
+    ];
+    buttonSpecs.forEach(([label, style, hover, on], i) => {
+      this.makeButton(40 + i * 200, 620, style, label, hover, on);
+    });
+  }
+
+  private makeButton(
+    x: number,
+    y: number,
+    style: ButtonStyle,
+    label: string,
+    hover: number,
+    enabled: boolean,
+  ): void {
+    const b = new Button(this.game.fonts, { x, y, w: 180, h: 56 }, label, { style, enabled });
+    // Driven directly rather than through update(), so the screenshot can show
+    // a hovered button without a pointer.
+    b.hoverT = hover;
+    this.root.addChild(b.root);
+    this.buttons.push(b);
   }
 
   override update(): void {
     // The tip bloom breathes on the wall clock, never the scene clock.
     const now = performance.now();
     for (const { bar, frac, color } of this.bars) bar.set(frac, color, now);
+    for (const b of this.buttons) b.draw(this.theme, this.game.time);
   }
 }

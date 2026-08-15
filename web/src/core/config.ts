@@ -142,6 +142,8 @@ export const FLASH_DECAY = num("FLASH_DECAY", 3.2);
 export const UI_CORNER = int("UI_CORNER", 12);
 export const UI_BUTTON_W = int("UI_BUTTON_W", 300);
 export const UI_BUTTON_H = int("UI_BUTTON_H", 58);
+/** Per-button click debounce, seconds. */
+export const UI_CLICK_COOLDOWN = num("UI_CLICK_COOLDOWN", 0.1);
 export const TRANSITION_TIME = num("TRANSITION_TIME", 0.55);
 
 // ---------------------------------------------------------------------------

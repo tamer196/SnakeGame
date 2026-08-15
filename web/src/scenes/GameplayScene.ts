@@ -42,6 +42,7 @@ import {
 import { SnakeRenderer } from "../gfx/SnakeRenderer";
 import { Button } from "../ui/Button";
 import { Hud } from "../ui/hud/Hud";
+import { ReadyOverlay } from "../ui/hud/ReadyOverlay";
 import { SCENES } from "../app/Scene";
 
 /** `gameplay.py:133`. The pause button's rect, inside the HUD strip. */
@@ -91,6 +92,7 @@ export class GameplayScene extends Scene implements GameplayPresenter {
   private readonly pauseButton: Button;
   private readonly pauseLayer = new Container();
   private readonly pauseClip = new Graphics();
+  private readonly ready: ReadyOverlay;
   private theme: Theme;
   private entered = false;
 
@@ -131,6 +133,10 @@ export class GameplayScene extends Scene implements GameplayPresenter {
     this.pauseLayer.addChild(this.pauseClip, this.pauseButton.root);
     this.pauseButton.root.mask = this.pauseClip;
     this.root.addChild(this.pauseLayer);
+
+    // Above everything, unclipped: the card overlaps the arena border by design.
+    this.ready = new ReadyOverlay(game.fonts);
+    this.root.addChild(this.ready.root);
   }
 
   // -------------------------------------------------------------------
@@ -267,6 +273,21 @@ export class GameplayScene extends Scene implements GameplayPresenter {
       this.game.time,
       performance.now(),
     );
+
+    const world = this.world;
+    this.ready.update(world.readyTimer, world.goTimer, {
+      levelNumber: world.level.number,
+      levelName: world.level.name,
+      levelSubtitle: world.level.subtitle,
+      levelHint: world.level.hint,
+      goalFood: world.level.goalFood,
+      difficultyLabel: world.diff.hudLabel,
+      difficultyColor: world.diff.color,
+      storyMode: world.storyMode,
+      chapterRoman: world.chapter?.roman() ?? null,
+      chapterTitle: world.chapter?.title ?? null,
+      beatTitle: world.beat?.title ?? null,
+    }, this.theme);
   }
 
   /**

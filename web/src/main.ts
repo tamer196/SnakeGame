@@ -12,6 +12,7 @@ import { attachInput } from "./input/Input";
 import { BootScene } from "./scenes/BootScene";
 import { GameplayScene } from "./scenes/GameplayScene";
 import { PreviewScene } from "./scenes/PreviewScene";
+import { UiKitScene } from "./scenes/UiKitScene";
 
 function dismissBootSplash(): void {
   const boot = document.getElementById("boot");
@@ -55,6 +56,7 @@ async function main(): Promise<void> {
   // Development only: reachable by name from the screenshot harness, never
   // linked to from the game itself.
   game.registerScene("preview", (g) => new PreviewScene(g));
+  game.registerScene("uikit", (g) => new UiKitScene(g));
 
   game.start("boot");
   dismissBootSplash();

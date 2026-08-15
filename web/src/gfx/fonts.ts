@@ -108,6 +108,22 @@ export interface Metrics {
   readonly h: number;
 }
 
+/**
+ * A face's own metrics, independent of any string - pygame's
+ * `Font.get_height()` and `Font.get_ascent()`.
+ *
+ * These are load-bearing. `Font.render` returns a surface whose height is the
+ * font height whatever the string, with the baseline at the ascent, so "SCORE"
+ * and "goal" produce identically tall surfaces. All 132 `draw_text` call sites
+ * are calibrated against that, and every vertical centring in the game is
+ * computed by hand from it.
+ */
+export interface FaceMetrics {
+  readonly height: number;
+  readonly ascent: number;
+  readonly descent: number;
+}
+
 // ---------------------------------------------------------------------------
 // Measurement
 // ---------------------------------------------------------------------------
@@ -156,6 +172,7 @@ export function cssFont(opts: TextStyleOptions): string {
  */
 export class FontBook {
   private readonly cache = new Map<string, TextStyleOptions>();
+  private readonly faces = new Map<string, FaceMetrics>();
 
   /**
    * Raster scale for `Text` objects, which callers copy to `text.resolution`.
@@ -248,6 +265,36 @@ export class FontBook {
         ? ascent + descent
         : this.lineHeight(opts);
     return { w: m.width, h };
+  }
+
+  /**
+   * The face's own height, ascent and descent - not any string's.
+   *
+   * Cached per style, because it is asked for on every glyph raster and the
+   * answer cannot change once the face has resolved.
+   */
+  faceMetrics(opts: TextStyleOptions): FaceMetrics {
+    const key = cssFont(opts);
+    const hit = this.faces.get(key);
+    if (hit) return hit;
+
+    const ctx = measurementContext();
+    ctx.font = key;
+    // Any string will do: fontBoundingBox* describe the face, not the text.
+    const m = ctx.measureText("Hg");
+    const ascent = m.fontBoundingBoxAscent;
+    const descent = m.fontBoundingBoxDescent;
+    const usable = Number.isFinite(ascent) && Number.isFinite(descent) && ascent + descent > 0;
+    const face: FaceMetrics = usable
+      ? { height: ascent + descent, ascent, descent }
+      : // No font box reported: fall back to the ratio the ladder was measured at.
+        {
+          height: this.lineHeight(opts),
+          ascent: this.lineHeight(opts) * 0.8,
+          descent: this.lineHeight(opts) * 0.2,
+        };
+    this.faces.set(key, face);
+    return face;
   }
 
   /** Just the width, which is what almost every call site actually wants. */

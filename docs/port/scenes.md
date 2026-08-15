@@ -35,31 +35,39 @@ the documented #1 bug source in this design.
 
 ## Status of this document
 
-| Section | Source | Written | Audited |
+| Section | Source | Audited | Ported |
 |---|---|---|---|
-| 1 Menu | menu.py | yes | no |
-| 2 Mode select | mode_select.py | yes | no |
-| 3 Level select | level_select.py | yes | no |
-| 4 Pause / 5 Help | pause.py, help_scene.py | yes | no |
+| 1 Menu | menu.py | yes | **yes** - `web/src/scenes/MenuScene.ts` |
+| 2 Mode select | mode_select.py | **no** | no |
+| 3 Level select | level_select.py | **no** | no |
+| 4 Pause / 5 Help | pause.py, help_scene.py | **no** | **yes** - `PauseScene.ts`, `HelpScene.ts` |
 | 6 `_ResultScene` base | gameover.py:1-704 | yes | no |
 | 7 Game over / 8 Victory | gameover.py:705-1184 | yes | no |
-| **9 Settings** | **settings.py** | **not yet** | - |
-| **10 Story** | **story_scene.py** | **not yet** | - |
+| 9 Settings | settings.py | yes | no |
+| 10 Story | story_scene.py | yes | no |
 
-The adversarial audit pass, and the cross-scene critic that was to assemble the whole navigation
-graph and the session-state contract, **did not run** - both were cut off by a spend limit. So:
+Read that table before trusting a number. Sections 2, 3, 4 and 5 are **first-pass
+transcriptions that no audit has checked** - reread the cited line of Python while implementing
+it. Sections 4 and 5 were nonetheless ported successfully, which is weak evidence they are
+sound, but the port was written from the Python rather than from them.
 
-- Every coordinate here is a first-pass transcription; reread the cited line while implementing
-  it, then compare against the capture.
-- Nothing has yet checked the scenes against *each other*. The navigation graph, the
-  `game.*` / `SaveData` read-write ordering, and the machinery several scenes duplicate (the
-  scrolling-list focus idiom, the muted-theme treatment, the staged-reveal helper, keyboard-vs-
-  mouse focus arbitration) are **not** consolidated anywhere. Do that before porting the second
-  scene, or the port will grow four slightly different versions of each.
-- Sections 9 and 10 must be written before those scenes are ported.
+The cross-scene critic - which was to assemble the whole navigation graph, the
+`game.*` / `SaveData` read-write ordering, and the machinery several scenes duplicate - **did
+not run**; it was cut off by a spend limit. Some of that work has since been done by hand
+instead: `web/src/ui/wrap.ts` collapses the five `_wrap` copies, `web/src/ui/muteTheme.ts` the
+result screens' palette, and `web/src/ui/glow.ts::arcPath` the arc-path trap. What is still
+**not** consolidated anywhere is the scrolling-list focus idiom and keyboard-vs-mouse focus
+arbitration; decide those once, not per scene.
 
-Each section did cross-check itself against its reference capture and against the ported TS
-core, and reported gaps in that core; those are collected in the appendix.
+Each section cross-checked itself against its reference capture and against the ported TS core,
+and reported gaps in that core.
+
+**The port is written from the Python, not from this document.** The working loop that has
+found every real bug so far is: port a scene from the source, build, screenshot it with
+`node tools/shot.mjs --eval "game.switchScene('<key>')"`, and compare against `captures/*.png`
+by eye. Four defects surfaced that way - a stray arc leader line across the screen, a
+banker's-rounding difference in a printed duration, a missing stats row, and a scene-stack
+unparent bug - and none of them would have failed a type check or a unit test.
 
 Verification is perceptual (screenshots vs `E:/SnakeGame/captures/*.png` at 1280x720, which is
 exactly the design space), never pixel-diff. The captures, in scene order:
@@ -73,19 +81,35 @@ exactly the design space), never pixel-diff. The captures, in scene order:
 Ground truth: `E:/SnakeGame/snake/scenes/menu.py`, lines 1-834 (the whole file).
 Reference capture: `E:/SnakeGame/captures/01-menu.png`.
 
-Suggested TS home: **`web/src/scenes/MenuScene.ts`** — `export class MenuScene extends Scene`,
-constructed like `GameplayScene` is in `web/src/main.ts:54`:
-`game.registerScene("menu", (g) => new MenuScene(g, save, sound))`. Two menu-local helpers
-deserve their own small modules rather than being inlined:
+TS home: **`web/src/scenes/MenuScene.ts`** — `export class MenuScene extends Scene`, registered
+alongside `GameplayScene` in `web/src/main.ts:60`:
+`game.registerScene("menu", (g) => new MenuScene(g, save, sound))`.
 
-| Python | Suggested TS |
+> **This scene is already ported** (commit `20f4f5b`, "Port the title screen", 832 lines). This
+> section stays the reference for *what the Python does*; §1.21 lists every place the shipped
+> port departs from it. Read §1.21 before changing `MenuScene.ts`.
+
+The four menu-local helpers, and where they land:
+
+| Python | TS |
 |---|---|
-| `_blend_themes` / `_quantise` (menu.py:99-132) | `web/src/gfx/themeBlend.ts` → `blendThemes(a, b, t)`, `quantise(v, steps)` — the level-select and mode-select scenes carousel too |
-| `_TitleArt` / `_additive_copy` (menu.py:138-178) | `web/src/gfx/Wordmark.ts` → `class Wordmark` (a `Container` holding three `Text` objects) |
-| `_badge_surface` / `_BADGE_CACHE` (menu.py:186-218) | `web/src/gfx/DifficultyBadge.ts` → `class DifficultyBadge` (a `Container`); reused by mode-select and settings |
+| `_blend_themes` (menu.py:99-127) | **already exists**: `blendThemes(a, b, t)` in `web/src/core/palette.ts:182-244` — it rebuilds the `hex` mirror too (palette.ts:230-243). Do **not** add a `gfx/themeBlend.ts`. |
+| `_quantise` (menu.py:130-132) | no shared home and does not need one — a 2-line module `const` in the scene (`MenuScene.ts:83`). Level-select and mode-select can copy it or import it from here if they ever carousel. |
+| `_TitleArt` / `_additive_copy` (menu.py:138-178) | three `Sprite`s sharing **one** `glyphTexture(GAME_TITLE, fonts.huge, fonts)` (`web/src/ui/text.ts:101`), `tint`ed per layer, `blendMode = "add"` on two of them. Not three `Text` objects, and not a `Label` — `Label` owns its own texture and align maths, which the rigid three-layer stack does not want. |
+| `_badge_surface` / `_BADGE_CACHE` (menu.py:186-218) | a `Container` holding one rounded rect + one `Label` (`ui/text.ts:116`). `Panel` (`ui/panel.ts:251`) is **not** a drop-in: `Panel` draws at the fixed `C.UI_CORNER`, and the badge is a *full* pill (`border_radius = h // 2`, §1.10.1). |
 
-`draw_panel`, `draw_text`, `draw_bar`, `Button` and the font book are **owned by
-`docs/port/ui.md`**. Every reference below records the call site and its arguments only.
+`draw_panel`, `draw_text`, `draw_bar`, `Button`, `draw_cursor`, `draw_hud` and the font book are
+**owned by `docs/port/ui.md`** and are **now ported**. The real exports this scene calls:
+
+| Python | TS export | Module |
+|---|---|---|
+| `draw_panel(surface, rect, theme, alpha=, glow=)` | `Panel` — `setRect(x, y, w, h)`, `setStyle(accent, alpha255, border, glow)` (takes `theme.accent`, **not** the theme) | `web/src/ui/panel.ts:251, 303, 329` |
+| `draw_text(surface, text, font, color, pos, align=, shadow=)` | `Label` — `set`, `place(x, topY, align)`, `setColor`, `setAlpha`, `setShadow`, `setScale`, `textWidth`, `textHeight` | `web/src/ui/text.ts:116, 149, 173, 192, 197, 201, 210, 129, 131` |
+| `draw_bar(surface, rect, frac, color)` | `Bar` — `setRect`, `set(frac, color, nowMs)` (the leading-edge breathe reads `nowMs`, which is Python's `pygame.time.get_ticks()`) | `web/src/ui/bar.ts:126, 165, 194` |
+| `Button(rect, label, style=, font=, data=)` | `Button` + `ButtonState` — `handlePointer(ev)`, `update(dt, pointer)`, `draw(theme, t)` (**no `fonts` argument**), `setEnabled`, `hovered`, `justEntered`, `hoverT`, `pressT`, `data`; plus `buttonFace`, `hits` | `web/src/ui/Button.ts:425, 343, 561, 565, 573, 557, 141, 332` |
+| `fonts.huge/h2/body/small/tiny` | `game.fonts` (`FontBook`) — same role names, plus `get(size, bold)`, `displayAt(size)`, `measureWidth`, `faceMetrics`, `fit(...)` | `web/src/gfx/fonts.ts`, live on `app/Game.ts:98` |
+
+Every reference below records the call site and its arguments only — never widget internals.
 
 ---
 
@@ -99,12 +123,29 @@ deserve their own small modules rather than being inlined:
 | TS key | `SCENES.MENU` = `"menu"` (`web/src/app/Scene.ts:66`) | |
 | `transparent` | `False` | menu.py:227 |
 | `blocks_update` | `True` | menu.py:228 |
+| TS flags | inherited: `static transparent = false`, `static blocksUpdate = true` — `MenuScene` overrides neither, which is correct | `app/Scene.ts:20, 22` |
 | Boot entry | `Game.run(start_scene=C.SCENE_MENU)` — this is the first scene the process shows | main.py:479-480 |
-| Who else arrives here | `switch_scene(C.SCENE_MENU)` from mode-select / level-select / help / settings / game-over "back" paths, and `SettingsScene` is handed `back=C.SCENE_MENU` by this scene (menu.py:441) | |
 | Who this scene leaves to | `SCENE_MODE`, `SCENE_LEVELS`, `SCENE_HELP`, `SCENE_SETTINGS`, `game.quit()` — see §1.15 | menu.py:427-443 |
 
+Every inbound edge (exhaustive — `grep -rn SCENE_MENU snake/`). All of them are
+`switch_scene`, so the menu is always re-entered as the *whole* stack:
+
+| From | Trigger | Line |
+|---|---|---|
+| the process itself | `Game.run(start_scene=C.SCENE_MENU)` | main.py:479-480 |
+| `ModeSelectScene` | BACK | mode_select.py:476 |
+| `LevelSelectScene` | BACK | level_select.py:527 |
+| `HelpScene` | BACK | help_scene.py:420 |
+| `SettingsScene` | BACK — `back_target` defaults to `C.SCENE_MENU` and any unknown target is coerced to it | settings.py:219, 286-293, 553 |
+| `PauseScene` | QUIT TO MENU | pause.py:207 |
+| `_ResultScene` (game over / victory) | the two menu exits | gameover.py:530, 536 |
+| `StoryScene` | when its `next_scene` is the menu — which is what `VictoryScene` hands it after the final chapter | story_scene.py:512, 547, 819; gameover.py:984 |
+
+This scene also *hands out* `back=C.SCENE_MENU` to `SettingsScene` (menu.py:441), which is how
+settings knows where to return.
+
 The menu is **pure routing**: it never constructs a level, never writes `game.level_index`,
-and never starts a run (menu.py:16-24).
+and never starts a run (menu.py:16-23).
 
 ---
 
@@ -120,7 +161,7 @@ Put them at the top of `MenuScene.ts` as module `const`s; do not add them to `co
 | `THEME_FADE` | `2.4` s | 65 | cross-fade at the end of each period |
 | `THEME_BLEND_STEPS` | `8` | 70 | blend weight quantisation (see §1.6) |
 | `BUTTON_TOP` | `336` | 73 | y centre of button 0 |
-| `BUTTON_PITCH` | `C.UI_BUTTON_H + 13` = **71** | 74 | `UI_BUTTON_H` = 58 (`config.ts:144`) |
+| `BUTTON_PITCH` | `C.UI_BUTTON_H + 13` = **71** | 74 | `UI_BUTTON_H` = 58 (`core/config.ts:146`) |
 | `BUTTON_ENTRANCE` | `0.52` s | 76 | per-button slide duration |
 | `BUTTON_STAGGER` | `0.075` s | 77 | delay added per button index |
 | `BUTTON_SLIDE` | `190.0` px | 78 | horizontal travel during the entrance |
@@ -158,10 +199,15 @@ Constants pulled from elsewhere: `C.WINDOW_W/H` = 1280/720, `C.UI_BUTTON_W/H` = 
 | `_base_rects` | `List[pygame.Rect]` | `[]` | rebuilt by `_build_buttons()` (275) | resting rects; the entrance animates `button.rect` away from these |
 | `_demo` | `Optional[Snake]` | `None` | fresh `Snake` via `_spawn_demo()` (274) | |
 | `_demo_target` | `(float, float)` | `(640.0, 360.0)` | `_pick_target()` inside `_spawn_demo` (349) | |
-| `_demo_timer` | float | `0.0` | `0.0` (351) | counts **down**; `<= 0` picks a new leg |
-| `_demo_hairpins` | int | `0` | `0` (352) | queued hairpin legs |
+| `_demo_timer` | float | `0.0` | `0.0` (350) | counts **down**; `<= 0` picks a new leg |
+| `_demo_hairpins` | int | `0` | `0` (351) | queued hairpin legs |
 | `_ring_timer` | float | `RING_PERIOD` = 2.9 | `RING_PERIOD` (272) | counts down to the next shockwave |
 | `_rng` | `random.Random(0xC0FFEE)` | seeded once | **not reset** | see below |
+| `self.game` | `Game` | the constructor argument | untouched | the only attribute inherited from `Scene` (`contracts.py:51-52`); TS `Scene` does the same (`app/Scene.ts:24, 28-30`) |
+
+That is all 17 `self.*` assignments in `__init__` (menu.py:233-256) plus the base's `game`. No
+attribute is created outside `__init__`: every other `self.X = ...` in the file (menu.py:264-272,
+284, 331-332, 346-351, 386-392, 470, 490-492, 536-538, 640, 656-657) rebinds one of these.
 
 **Attributes built in `__init__` but not reset in `on_enter`:**
 
@@ -170,13 +216,14 @@ Constants pulled from elsewhere: `C.WINDOW_W/H` = 1280/720, `C.UI_BUTTON_W/H` = 
    cosmetic and arguably desirable (the attract mode does not repeat itself). Port note: seed
    `makeRng(0xC0FFEE)` (`core/mathx.ts:97`) **in the constructor, not in `onEnter`**, to keep
    the same behaviour. Bit-parity with Python is impossible here (Mersenne Twister vs the TS
-   LCG) — this is a *visual* parity target only.
+   LCG) — this is a *visual* parity target only. (The shipped port reseeds in `onEnter`;
+   see §1.21 D1.)
 2. `_fade_layer` — **safe, and disappears in the port.** It exists only because pygame cannot
    alpha-blend an opaque gradient surface without a scratch copy (menu.py:634-644). In Pixi the
    cross-fade is `nextBackground.root.alpha = themeBlend`; drop the field.
 
-Everything else *is* fully reset, and that matters: `on_enter` is wrapped in a bare
-`try/except: pass` (menu.py:262-277), so if `_spawn_demo` or `_build_buttons` throws, the scene
+Everything else *is* fully reset, and that matters: `on_enter`'s whole body is wrapped in a bare
+`try/except: pass` (menu.py:263-277), so if `_spawn_demo` or `_build_buttons` throws, the scene
 comes up with a **stale button list from the previous visit** and no demo snake. The port should
 keep the "never throw" posture but reset the plain fields *before* the two builders, exactly as
 Python does, so a builder failure cannot resurrect old geometry.
@@ -185,7 +232,7 @@ Module-level state, not per-instance:
 
 | Name | Line | Reset? | Port note |
 |---|---|---|---|
-| `_BADGE_CACHE: Dict[key, Surface]` | 186 | never; self-evicts when `len > 32` (215-216) | keyed `(label, colour&0xFF per channel, id(font))`. In TS a single `DifficultyBadge` instance per scene, `redraw()`d when the difficulty changes, is simpler and needs no cache. |
+| `_BADGE_CACHE: Dict[key, Surface]` | 186 | never; self-evicts when `len > 32` (215-216) | keyed `(label, colour&0xFF per channel, id(font))`. The port needs no cache at all: one badge `Container` per scene (rounded rect + `Label`), re-laid-out only when `(hud_label, color)` changes — at most four distinct states, and the difficulty cannot change while this scene is up. |
 
 ---
 
@@ -200,8 +247,10 @@ Module-level state, not per-instance:
 
 `on_exit` (menu.py:279-286) drops **only** `_backgrounds` and `_fade_layer`, with the comment
 "Backgrounds hold pre-rendered full-screen surfaces; drop them so the menu does not keep a dozen
-of them alive while the game is running." The Pixi equivalent must call `background.destroy()`
-on each (`gfx/bg/Background.ts:107`) — Pixi textures are not garbage collected.
+of them alive while the game is running." The Pixi equivalent must remove `bg.root` from its
+parent and call `background.destroy()` on each (`gfx/bg/Background.ts:288`; note `:107` is
+`LoResBuffer.destroy`, a different class in the same file) — Pixi textures are not garbage
+collected.
 
 Two things `on_enter` deliberately does **not** do:
 
@@ -213,9 +262,10 @@ Two things `on_enter` deliberately does **not** do:
 **Port sizing warning.** Python builds each background for the fixed design box
 `(0, 0, C.WINDOW_W, C.WINDOW_H)` (menu.py:516). Per the settled convention the port builds
 backgrounds at `game.viewport.overscan` instead (as `GameplayScene.rebuildBackground` does,
-`web/src/scenes/GameplayScene.ts:173-179`), which means `onResize` must rebuild whichever
-backgrounds are cached. Keep Python's ≤3 eviction (menu.py:504-507) — twelve overscan-sized
-background stages held live would be the single heaviest thing in the app.
+`web/src/scenes/GameplayScene.ts:195-205`), which means `onResize` must rebuild whichever
+backgrounds are cached — `Scene.onResize` exists for exactly this (`app/Scene.ts:52`). Keep
+Python's ≤3 eviction (menu.py:504-507) — twelve overscan-sized background stages held live would
+be the single heaviest thing in the app.
 
 ---
 
@@ -228,7 +278,8 @@ animated rigidly. Do not invent a per-glyph stagger in the port.
 #### 1.5.1 `_TitleArt` — the three cached surfaces (menu.py:157-178)
 
 Built from `self.game.fonts.huge` (menu.py:652), which is `display_at(96)`
-(`snake/gfx/fonts.py:63`).
+(`snake/gfx/fonts.py:63`). Same in TS: `fonts.huge = this.displayAt(96)`
+(`web/src/gfx/fonts.ts:204`).
 
 ```
 base = font.render(TITLE_TEXT, True, (255, 255, 255))
@@ -249,13 +300,15 @@ though — keep it.
 
 `_additive_copy` (menu.py:138-154) exists purely to premultiply coverage into RGB against opaque
 black, because pygame's additive blit would otherwise add a solid rectangle. **The port does not
-need it**: three Pixi `Text` objects with `blendMode = "add"` on two of them, tinted by
-`toHex(...)`, are exactly equivalent and cost no extra rasterisation.
+need it**: three `Sprite`s sharing **one** `glyphTexture(GAME_TITLE, fonts.huge, fonts)`
+(`ui/text.ts:101`), with `blendMode = "add"` on two of them and a `tint` each, are exactly
+equivalent and cost one rasterisation instead of three.
 
 Rebuild key (menu.py:648): `(self._theme_index, self._theme_blend)`. Because the blend is
 quantised to 8 steps (§1.6) the three tints change at most 9 times per cross-fade, i.e. ~9 tint
-writes per 11 s. In Pixi this is a `tint` assignment on three existing `Text` objects — never a
-re-render, never a new object.
+writes per 11 s. In Pixi this is a `tint` assignment on three existing `Sprite`s — never a
+re-render, never a new object, and the shared glyph texture never changes at all (the string is
+constant; only the colours move).
 
 #### 1.5.2 Paint order of the logo (menu.py:662-694)
 
@@ -298,12 +351,28 @@ The nine glow stamps, resolved for the shipped 699 px wordmark
 Together they read as one soft horizontal bar of light behind the letters, gradient-shifting from
 `accent` on the left to `accent2` on the right. TS: nine `Sprite`s from
 `glowSprite(86, col, intensity)` (`gfx/textures.ts:255`), created once in the constructor, with
-`setGlow(sprite, 86, col_i, 0.30 + 0.16*breathe)` per frame — `setGlow` swaps the texture only
-when the quantised radius changes, so this is two property writes per stamp per frame.
+`setGlow(sprite, 86, col_i, 0.30 + 0.16*breathe)` per frame — `setGlow` (`gfx/textures.ts:272`)
+swaps the texture only when the quantised radius changes, so this is two property writes per
+stamp per frame.
 
-`ease_out_back` overshoots (`contracts.py:207-211`, `c3 = 2.70158`): `k` peaks at ≈1.0999
-around `t≈0.6`, so `top` dips ≈6 px **below** 116 mid-entrance before settling. Keep it —
-that overshoot is the whole character of the drop-in.
+**Which glow, and it matters.** `menu.py:49` imports `draw_glow_circle` from **`..gfx.render`**,
+not from `gfx.ui`. The two are different curves and there are two ported modules to match:
+
+| Python | falloff | TS |
+|---|---|---|
+| `gfx/render.py::glow_surface` / `draw_glow_circle` (render.py:310, 355) | render-layer bloom, quantised radius/colour/intensity buckets | `glowSprite` / `setGlow`, `gfx/textures.ts:255, 272` |
+| `gfx/ui.py::_glow_add` / `_blit_glow` (ui.py:144, 171) | `(1 - f) ** 2.4`, `steps = clamp(radius, 5, 26)`, radius clamped 2..260 | `uiGlowSprite` / `setUiGlow`, `ui/glow.ts:104, 116` (`UI_GLOW_GAMMA = 2.4`, `UI_GLOW_MIN/MAX_STEPS = 5/26`) |
+
+The wordmark under-glow (menu.py:683) and the difficulty-badge halo (menu.py:754) are both
+`draw_glow_circle`, so both take the **`gfx/textures.ts`** pair. Using `uiGlowSprite` there is a
+visible falloff change, not a naming preference. (The shipped port uses `uiGlowSprite`; §1.21 D3.)
+
+`ease_out_back` overshoots (`contracts.py:207-211`, `c1 = 1.70158`, `c3 = 2.70158`). The peak is
+at `f = -2·c1 / (3·c3) = -0.419891`, i.e. `t = 0.58011`, where `k = 1.100008` and `(1 - k) =
+-0.100008`. So mid-entrance `top` becomes `116 - (-0.100008 · 60) = 122.0` — six pixels **lower
+on screen** than its resting 116 — before settling back. Keep it: that overshoot is the whole
+character of the drop-in, and the same `-0.100008` sets every other overshoot in this scene
+(buttons ±19.0 px §1.9.2, badge -4.0 px §1.10.2, stats panel +26.0 px §1.11).
 
 #### 1.5.3 Tagline (menu.py:696-702)
 
@@ -323,8 +392,11 @@ Three spaces, hyphen-minus, three spaces. With theme 0 that is
 | condition | drawn whenever `_title_surfaces()` returns non-null |
 
 The theme name is live, so the tagline is how the player can read the carousel. **The string
-changes every 11 s**, which is the one place in this scene where a Pixi `Text` genuinely has to
-re-render; guard it with `if (text.text !== next) text.text = next`.
+changes every 11 s**, which is the one place in this scene where a `Label` genuinely has to
+re-raster. `Label.set` (`ui/text.ts:149`) already early-outs on an unchanged string *and* the
+glyph cache (`GLYPH_CACHE_LIMIT = 900`, `ui/text.ts:38`) holds all twelve variants after one
+lap of the carousel, so calling `set(...)` unconditionally every frame is correct and cheap —
+no scene-side `if (text !== next)` guard is needed.
 
 #### 1.5.4 Version stamp and footer hint (`_draw_footer`, menu.py:824-834)
 
@@ -350,7 +422,7 @@ Nothing escalates and nothing resets after N seconds. The scene will run forever
 
 ---
 
-### 1.6 The theme carousel (`_update_theme`, menu.py:480-520)
+### 1.6 The theme carousel (`_update_theme`, menu.py:480-507; `_background`, 509-520)
 
 ```
 n          = len(P.THEMES) = 12
@@ -370,8 +442,9 @@ So each theme holds for 8.6 s and cross-fades over the last 2.4 s.
 `_blend_themes` (menu.py:99-127): returns `a` when `t <= 0.001`, `b` when `t >= 0.999`,
 otherwise a synthetic `Theme` whose **twelve colours are each `lerp_color(a.X, b.X, t)`** and
 whose `name` and `bg_style` come from `lead = b if t >= 0.5 else a` (they are not
-interpolatable). TS: `blendThemes(a, b, t): Theme` — must also recompute the `hex` mirror
-(`core/palette.ts:232-245`), because every Pixi tint reads from it.
+interpolatable). TS: **already ported** as `blendThemes(a, b, t): Theme`
+(`core/palette.ts:182-244`), including the `hex` mirror rebuild (palette.ts:230-243) that every
+Pixi tint reads from. Note it is exported from `core/palette.ts`, not from a `gfx/` module.
 
 `_quantise` (menu.py:130-132) exists **only** because pygame's UI helpers cache surfaces per
 colour and a continuously varying colour would mint a new surface every frame (menu.py:66-70).
@@ -410,9 +483,12 @@ _demo_timer    = 0.0
 _demo_hairpins = 0
 ```
 
-TS: `new Snake(640, 446.4, heading, 30)` then `snake.speed = 196`
-(both public, `core/snake.ts:233-242`). For the re-spawn path prefer
-`snake.reset(640, 446.4, heading, 30)` (`core/snake.ts:551`) so the object is reused.
+TS: `new Snake(640, 446.4, heading, 30)` (constructor `core/snake.ts:233-236`) then
+`snake.speed = 196` (`speed` is public, `core/snake.ts:180`; the constructor leaves it at
+`C.SNAKE_BASE_SPEED`, snake.ts:242, so the assignment is required). For the re-spawn path prefer
+`snake.reset(640, 446.4, heading, 30)` (`core/snake.ts:548`) so the object is reused: `reset`
+leaves `speed` alone and only re-derives `currentSpeed` from it (snake.ts:565), so the
+`speed = 196` assignment is a one-off at construction and survives every respawn.
 
 #### 1.7.2 `_pick_target` (menu.py:353-362) — biased wander point
 
@@ -534,7 +610,13 @@ with `center = (640, BUTTON_TOP + i * BUTTON_PITCH)`.
 | 4 | `"quit"` | `"QUIT"` | `danger` | `None` | `(490, 591, 300, 58)` | `(640, 620)` | `game.quit()` |
 
 Only the two `ghost` buttons are handed an explicit font, and only if `game.fonts` exists
-(menu.py:338-339). `_play_label()` (menu.py:315-316) is evaluated **once per entry**, at build
+(menu.py:338-339) — **and it changes nothing.** `Button._label_font` (`ui.py:493-500`) already
+resolves `ghost` to `_font(fonts, "body", 21)`, `tile` to `small/17` and everything else to
+`h2/30 bold`, so `font=fonts.body` on a ghost button is exactly the default. The TS `Button`
+reproduces the same ladder (`ui/Button.ts:511`). Record the argument for fidelity; do not build a
+port feature around it, and do not "notice" that the other three buttons are missing a font.
+
+`_play_label()` (menu.py:315-316) is evaluated **once per entry**, at build
 time — a save change while the menu is open would not relabel the button. Safe in practice
 (nothing mutates the save while the menu is up), but do not "improve" it into a per-frame
 lookup or the label will start flickering during the ui-kit's cached-text path.
@@ -589,7 +671,13 @@ This is the important design fact and it must not be "improved" in the port:
 * Consequence for touch: hover never happens on a touch device, so the buttons must remain
   fully operable from a tap. `Button.handle_event` requires the press *and* the release to land
   inside the rect (`ui.py:476-484`), which is already tap-compatible; the port's pointer
-  plumbing must deliver both.
+  plumbing must deliver both. **This is already handled by the ui kit**, and the menu inherits
+  it for free: `ButtonState.handlePointer` keeps the press-and-release rule
+  (`ui/Button.ts:392-398`), lights `hovered` on `down` so a tap animates at all
+  (`ui/Button.ts:385`), and `ButtonState.update` un-lights it for a touch pointer that is not
+  armed (`ui/Button.ts:417`) so a tapped button does not stay lit under a cursor that no longer
+  exists. The scene must not reimplement any of that — it only feeds `game.uiEvents` in and reads
+  the returned `true`.
 
 ---
 
@@ -619,13 +707,22 @@ For the shipped `fonts.tiny` (14 pt → 19 px line box) the four difficulties me
 | hard | `HARD` | (35, 19) | 65 x 31 | `(255, 168, 72)` |
 | expert | `EXPERT` | (45, 19) | **75 x 31** | `(255, 84, 132)` |
 
-(`web/src/data/difficulty.json`, key `modes[].hud_label` / `modes[].color`; the metrics are
-measured off the shipped desktop `fonts.tiny`. The **height is font-driven, not fixed** —
-`h = max(24, text_h + 12)` — so whatever face ui.md lands on will move all four widths and may
-move `h`. Re-measure there; only `EXPERT` at 75 x 31 is confirmed against the capture.)
+(`web/src/data/difficulty.json`, key `modes[].hud_label` / `modes[].color` — re-verified against
+`snake/core/difficulty.py:213-214, 235-236, 257-258, 279-280`, all four match. The metrics are
+measured off the shipped desktop `fonts.tiny` (`segoeui` at 14). The **height is font-driven, not
+fixed** — `h = max(24, text_h + 12)` — so whatever face ui.md lands on will move all four widths
+and may move `h`. Re-measure there; only `EXPERT` at 75 x 31 is confirmed against the capture.)
 
-`border_radius = h // 2 = 15`, i.e. a full pill. TS: one `Graphics` rounded rect + one `Text`,
-inside a `Container`; rebuild only when `(label, color)` changes.
+`border_radius = h // 2 = 15`, i.e. a **full pill / stadium**, confirmed in the capture (§1.18).
+TS: one `Graphics` rounded rect + one `Label` (`ui/text.ts:116`) inside a `Container`; re-lay-out
+only when `(label, color)` changes. `Panel` cannot substitute — it draws at the fixed
+`C.UI_CORNER`, which is visibly squarer. Width comes from `fonts.measureWidth(fonts.tiny, label)
++ 30`, height from `max(24, label.textHeight + 12)`.
+
+The kit has **no shared pill primitive** — `Bar` rolls its own (`.roundRect(0, 0, w, h, h/2)`,
+`ui/bar.ts:170-173`, with the same "`h // 2` is a true stadium" note). Copy that two-line idiom
+rather than inventing a widget or bending `Panel`; and do not push a pill into `ui.md` for one
+call site.
 
 #### 1.10.2 `_draw_difficulty_badge` (menu.py:734-762)
 
@@ -754,11 +851,11 @@ Everything below is post-entrance (`_entered > 0.82`). Entrance offsets are in �
 | wordmark body | `290` | `116` | 699 x 96 | top-left | `huge` | `lerp(theme.text, UI_WHITE, 0.55)` | always |
 | tagline | `640` | `218` | 488 x 28 | top-centre | `body` | `lerp(text_dim, accent, 0.35 + 0.25 pulse(t, 0.9))` | always |
 | PLAY caption | `640` | `277` | — | top-centre | `small` | `shade(text_dim, 1.0)` | `_entered > 0.5` |
-| button 0 `PLAY`/`CONTINUE` | `490` | `307` | 300 x 58 | rect | Button default | `style="primary"` | `_entered > 0` |
-| button 1 `LEVELS` | `490` | `378` | 300 x 58 | rect | Button default | `style="primary"` | `_entered > 0.075` |
-| button 2 `HOW TO PLAY` | `490` | `449` | 300 x 58 | `fonts.body` | | `style="ghost"` | `_entered > 0.15` |
-| button 3 `SETTINGS` | `490` | `520` | 300 x 58 | `fonts.body` | | `style="ghost"` | `_entered > 0.225` |
-| button 4 `QUIT` | `490` | `591` | 300 x 58 | Button default | | `style="danger"` | `_entered > 0.30` |
+| button 0 `PLAY`/`CONTINUE` | `490` | `307` | 300 x 58 | rect | Button default (`h2`, bold) | `style="primary"` | `_entered > 0` |
+| button 1 `LEVELS` | `490` | `378` | 300 x 58 | rect | Button default (`h2`, bold) | `style="primary"` | `_entered > 0.075` |
+| button 2 `HOW TO PLAY` | `490` | `449` | 300 x 58 | rect | `fonts.body` (= the ghost default) | `style="ghost"` | `_entered > 0.15` |
+| button 3 `SETTINGS` | `490` | `520` | 300 x 58 | rect | `fonts.body` (= the ghost default) | `style="ghost"` | `_entered > 0.225` |
+| button 4 `QUIT` | `490` | `591` | 300 x 58 | rect | Button default (`h2`, bold) | `style="danger"` | `_entered > 0.30` |
 | `"DIFFICULTY"` | `806` | `303` | — | top-left | `tiny` | `shade(text_dim, 0.85)` | `_entered >= 0.35` |
 | difficulty badge glow | `843.5` | `336` | radius `56.25` | centre | — | `diff.color`, `α = (0.22 + 0.12 pulse(t, 1.1)) k` | `_entered >= 0.35` |
 | difficulty badge pill | `806` | `320` | `75 x 31` (EXPERT) | top-left | `tiny` | fill `with_alpha(UI_PANEL, 232)`, border `with_alpha(diff.color, 200)` w=2 r=15, label `lerp(diff.color, UI_WHITE, 0.35)` | `_entered >= 0.35` |
@@ -773,6 +870,29 @@ Everything below is post-entrance (`_entered > 0.82`). Entrance offsets are in �
 | `"LEVELS CLEARED n / 12"` | `52` | `656` | — | top-left | `tiny` | `shade(text_dim, 0.95)` | with panel |
 | footer hint | `640` | `694` | — | top-centre | `tiny` | `shade(text_dim, 0.8)` | always |
 | version `v1.0.0` | `1260` | `694` | — | top-**right** | `tiny` | `shade(text_dim, 0.7)` | always |
+
+Two conventions that apply to every text row above and are easy to lose:
+
+* **`pos[1]` is the top edge, always** (`ui.py:274-275`); `pos[0]` is left / centre / right per
+  `align`. `x` and `y` are `int()`-truncated inside `draw_text` (ui.py:281). The TS `Label.place`
+  takes the same (x, topY, align) triple (`ui/text.ts:173`) but keeps floats, per the settled
+  float-coordinate convention — expect sub-pixel differences of up to 1 px against the capture,
+  and do not "fix" them with rounding.
+* **Every `draw_text` call in this scene draws a shadow** — a black silhouette of the glyphs at
+  `(x + 2, y + 2)` (`ui.py:286-288`, on by default). The **single exception** is the badge label
+  (`shadow=False`, menu.py:213). TS `Label` defaults the same way (`TEXT_SHADOW_OFFSET = 2`,
+  `TEXT_SHADOW_ALPHA = 150`, `ui/text.ts:34, 36`) and takes `setShadow(false)` for the badge.
+
+Measured ink extents for the fixed strings, off the shipped desktop font book
+(`bahnschrift` display / `segoeui` UI — re-measure if ui.md lands on a different face):
+
+| String | Font | `font.size()` |
+|---|---|---|
+| `NEON SERPENT` | `huge` (display 96) | 699 x 96 |
+| `A MOUSE-DRIVEN ARCADE ODYSSEY   -   NEON GRID` | `body` (21) | 488 x 28 |
+| `STORY  -  CHAPTER II  -  05 SOMETHING IN THE TRENCH` | `small` (17) | 421 x 23 |
+| `MOUSE STEERS  -  RIGHT-CLICK BOOSTS  -  ENTER PLAYS` | `tiny` (14) | 347 x 19 |
+| `v1.0.0` | `tiny` (14) | 31 x 19 |
 
 ---
 
@@ -790,10 +910,13 @@ Everything below is post-entrance (`_entered > 0.82`). Entrance offsets are in �
 | 5 | `_update_buttons(dt)` — §1.9.2, including `Button.update(dt, mouse)` and the hover cue | real |
 | 6 | `_update_ambience(dt)` — motes, then the ring timer | real |
 
-**Every consumer in this scene takes real dt.** There is no `sdt`, no `fx.time_scale()` read
-and no `hazard_t`: the menu is shell-level chrome and per `docs/port/integration.md` §10 menus
-run on real time. State that in the port and assert it — a test that drives `step()` with a
-fake `timeScale()` of 0.05 must see the menu animate at full speed.
+**Every consumer in this scene takes real dt**, and the proof is structural rather than by
+appeal to a rule: `menu.py` contains no `sdt`, no `hazard_t` and **no reference to `game.fx` at
+all** (grep returns nothing), so there is nothing for `fx.time_scale()` to multiply. That is the
+same real-dt side of the split `docs/port/integration.md` §10 draws for gameplay — §10 lists
+`game.time`, the particle system and the fx timers as real-dt consumers; the menu inherits the
+property by never opting in. State it in the port and assert it: a test that drives `step()`
+with a fake `timeScale()` of 0.05 must see the menu animate at full speed.
 
 Clock hygiene: `_t` drives everything periodic (`pulse`, `sin`, the carousel, `draw_snake`'s
 `t`, `Button.draw`'s `t`); `_entered` drives every entrance. Note that `Button.draw` is handed
@@ -826,16 +949,28 @@ never sets one: **nothing in this scene is clipped.** Layers, back to front:
 | 5 | wordmark (5 sub-layers) | `_draw_title` — §1.5.2 | unclipped |
 | 6 | buttons | `_draw_buttons` — `button.draw(surface, _theme, fonts, _t)` per visible button, then the PLAY caption | unclipped |
 | 7 | difficulty badge | `_draw_difficulty_badge` — glow, pill, `"DIFFICULTY"` label | unclipped |
-| 8 | stats panel | `_draw_stats_panel` — panel, 6 text rows, 1 bar | unclipped |
+| 8 | stats panel | `_draw_stats_panel` — panel, **7** text rows, 1 bar | unclipped |
 | 9 | footer | `_draw_footer` — hint + version | unclipped |
 | — | cursor + post-processing | shell (`Game.draw`, main.py:416-441) | above everything |
+
+The seven stats rows are BEST SCORE / the score / STORY / the summary / STARS / the count /
+LEVELS CLEARED (menu.py:788, 790, 795, 796, 801, 802, 807), plus the bar at 804.
+
+**There is no `draw()` in the TS `Scene` contract** (`app/Scene.ts:39-52` has `onEnter`,
+`onExit`, `update`, `onResize` and nothing else). The port keeps this table as the *child order
+of the scene root*, built once in the constructor, and re-points positions/tints at the end of
+`update` — one private `draw()` called from the last line of `update`, exactly as
+`MenuScene.ts:382` does. Do not add a shell draw phase for it.
 
 **Particles are below the snake here (layer 3 vs 4).** In `GameplayScene` they are *above*
 (`integration.md` §8, rows 6-7). That inversion is deliberate: on the menu the wake reads as a
 comet tail behind a solid snake. The port borrows the shell-owned `game.particles.root`
-(`app/Game.ts:59`) into the scene root at index 2 — the same borrow-and-return pattern
-`GameplayScene.onEnter`/`onExit` uses (`GameplayScene.ts:141-155`) — and must return it in
-`onExit`.
+(`ParticleSystem.root`, `gfx/particles.ts:537`; the system itself is `app/Game.ts:88`) into the
+scene root **directly above the background and directly below the snake** — the same
+borrow-and-return pattern `GameplayScene` uses (borrow `GameplayScene.ts:167`, return
+`GameplayScene.ts:181-182`) — and must return it in `onExit`. Concretely that is child **index
+1** when both backgrounds share one `bgLayer` container, which is how `MenuScene.ts:265` does it;
+count the children, do not hard-code a number copied from another scene.
 
 The background cross-fade becomes trivial in Pixi: keep both `Background.root` containers as
 children and set `incoming.root.alpha = _theme_blend`. Drop `_fade_layer` entirely.
@@ -881,15 +1016,32 @@ See §1.16 for the consequence.
 | click button 4 / `Esc` | `game.quit()` | — | — | sets `game.running = False` (main.py:329-330); `Game.shutdown` then mirrors `audio.muted`, `display_mode`, `difficulty`, `mode` into the save and writes it (main.py:495-504) |
 
 No `push_scene` and no `pop_scene`: the menu is always the bottom of the stack.
-`game.level_index` and `game.last_result` are never touched. `switch_scene` itself pops-and-exits
-the whole stack, enters the new scene, and calls `fx.begin_transition()` (main.py:307-314) — the
-transition is the *shell's*, not the menu's.
+`switch_scene` itself pops-and-exits the whole stack, enters the new scene, and calls
+`fx.begin_transition()` (main.py:307-314) — the transition is the *shell's*, not the menu's.
 
-**Port gap:** `game.quit()` has no TS counterpart. A browser tab cannot close itself. Options
-for `QUIT` on the web build: hide the button when `!window.navigator.standalone && !isElectron`,
-or repoint it at a "thanks for playing" card. Decide before porting; do not silently no-op it,
-because `Game.shutdown`'s save-flush hangs off the same path (the port needs an explicit
-`save.flush()` on `visibilitychange`/`pagehide` regardless).
+**Session state this scene writes — the complete list:**
+
+| Target | Written? | Where |
+|---|---|---|
+| `game.mode` | **yes**, and only to `C.MODE_FREE`, and only on the LEVELS route | menu.py:434 |
+| `game.difficulty` | never — the badge only *reports* it (§1.10) | — |
+| `game.level_index` | never | — |
+| `game.last_result` | never | — |
+| `game.running` | via `game.quit()` on the QUIT route | main.py:329-330 |
+| `SaveData` (any field) | **never, directly.** The menu is read-only on the save (§1.11.2). The only write on any menu path is `Game.shutdown`'s flush after `quit()` (main.py:495-504), which is the shell's, not this scene's | — |
+
+That read-only posture is why Q-M6 is harmless and why the port can hold a `SaveData` reference
+without any invalidation protocol.
+
+**Port gap G-M3 — resolved in the shipped port, but only half of it.** `game.quit()` has no TS
+counterpart (`Game` has no `quit`), because a browser tab cannot close itself. The port keeps the
+button and makes it flush the save (`MenuScene.ts:338-343`: `this.save.save()`), on the argument
+that an Electron/Capacitor wrapper can genuinely quit later. That is a defensible call, but it
+leaves the button doing nothing the player can see — see Q-M1. What is **still** missing either
+way is the rest of `Game.shutdown` (main.py:495-504): the mirror of `audio.muted`,
+`display_mode`, `difficulty` and `mode` into the save, and a `pagehide` /
+`visibilitychange` hook so the flush happens on the normal way out of a web page, not only when
+someone clicks QUIT.
 
 ---
 
@@ -905,8 +1057,9 @@ die, click, hover, start, levelup, win, boost, portal). No cue is missing and no
 used. Both calls are individually wrapped in `try/except: pass`.
 
 `web/src/audio/Audio.ts` already gates these: `GAIN` = `{click: 0.34, hover: 0.15}` and
-`MIN_INTERVAL` = `{hover: 0.070, click: 0.040}` (Audio.ts:55-66), so the port needs no extra
-rate limiting.
+`MIN_INTERVAL` = `{hover: 0.070, click: 0.040}` (Audio.ts:54-66), so the port needs no extra
+rate limiting. `Audio` is **not** on `Game`; it is injected through the scene factory
+(`main.ts:60`), so the call sites are `this.sound?.play("click")`.
 
 **`fx` calls: none.** `MenuScene` makes zero `flash`/`shake`/`slowmo`/`set_theme`/
 `begin_transition` calls (grep of menu.py for `game.fx` returns nothing). Two consequences:
@@ -915,7 +1068,8 @@ rate limiting.
   **untinted by this scene** — `fx.set_theme` is never called, so the wipe uses whatever accent
   the previous scene left behind;
 * the port must not add a `beginTransition` call in `MenuScene`; `Game.switchScene` already
-  does it (`app/Game.ts:196`).
+  does it (`this.post.fx.beginTransition()`, `app/Game.ts:268`). Note `integration.md` §2.4 and
+  §13/Q3 still describe this as a TS gap — that is stale; the hook landed.
 
 Particle calls, all on the shell-owned system:
 
@@ -960,32 +1114,42 @@ document records the Python fact; do not port it by accident.
 | `SaveData` | `save.max_stars()` | `save.maxStars()` | ✅ `core/save.ts:717` (returns `LEVEL_COUNT * 3` = 36) |
 | `SaveData` | `save.progress()` → `(cleared, total)` | `save.progress(): [number, number]` | ✅ `core/save.ts:745` |
 | `core.level` | `LEVEL_COUNT` (= 12) | `LEVEL_COUNT` | ✅ `core/level.ts:265` |
-| `core.difficulty` | `get_difficulty(game.difficulty)` | `getDifficulty(...)` | ✅ `core/difficulty.ts`, total |
-| | `diff.hud_label`, `diff.color` | `diff.hudLabel`, `diff.color` | ✅ |
-| `core.story` | `S.get_beat(i)`, `S.get_chapter(i)`, `S.CHAPTERS` | `getBeat`, `getChapter`, `CHAPTERS` | ✅ `core/story.ts:268, 279, 205` |
-| | `chapter.roman` (**property**) | `chapter.roman()` (**method**) | ⚠ naming shim, already flagged in `integration.md` §11 |
+| `core.difficulty` | `get_difficulty(game.difficulty)` | `getDifficulty(...)` | ✅ `core/difficulty.ts:258`, total (never raises, never null) |
+| | `diff.hud_label`, `diff.color` | `diff.hudLabel`, `diff.color` | ✅ `core/difficulty.ts:64, 62` |
+| `core.story` | `S.get_beat(i)`, `S.get_chapter(i)`, `S.CHAPTERS` | `getBeat`, `getChapter`, `CHAPTERS` | ✅ `core/story.ts:278, 289, 214` |
+| | `chapter.roman` (**property**) | `chapter.roman()` (**method**) | ⚠ naming shim, already flagged in `integration.md` §11 (integration.md:342, 566) |
 | | `beat.title` | `beat.title` | ✅ |
-| | **`beat.number`** (`story.py:71-74`, `= level_index + 1`) | — | ⛔ **gap G-M2**: `StoryBeat` in `core/story.ts:33-51` has `levelIndex`, `chapter`, `chapterTitle`, `title`, `intro`, `outro`, `speaker` — **no `number`**. Either add `readonly number` to the interface (built as `levelIndex + 1` in the `BEATS` map, `story.ts:191-199`) or write `beat.levelIndex + 1` at the one call site (`_play_caption`). Prefer adding the field: mode-select and the story card need it too. |
-| `palette` | `P.THEMES`, `P.Theme`, `P.lerp_color`, `P.shade`, `P.with_alpha`, `P.UI_PANEL`, `P.UI_WHITE`, `P.UI_GOLD` | `THEMES`, `Theme`, `lerpColor`, `shade`, `withAlpha`, `UI_PANEL`, `UI_WHITE`, `UI_GOLD` | ✅ `core/palette.ts` (+ `toHex`, `theme.hex`, `UI_HEX` for Pixi tints) |
-| `config` | `WINDOW_W/H`, `UI_BUTTON_W/H`, `MAX_DT`, `GAME_TITLE`, `GAME_SUBTITLE`, `MODE_FREE` | same names | ✅ `core/config.ts:46-47, 52-56, 143-144, 151` |
-| `config` | **`C.VERSION`** | — | ⛔ **gap G-M1**: `"VERSION": "1.0.0"` is in `web/src/data/config.json:124` but `core/config.ts` does not export it. Add `export const VERSION = str("VERSION", "1.0.0");`. Do **not** hard-code `"v1.0.0"` in the scene. |
+| | **`beat.number`** (`story.py:71-74`, `= level_index + 1`) | `beat.number` | ✅ **gap G-M2 is closed**: `StoryBeat.number` exists as a plain `readonly number` field (`core/story.ts:43`), built as `intOf(b.level_index, i) + 1` in the `BEATS` map (`core/story.ts:201`). It is a field, not a property — no call parens, unlike `roman()`. |
+| `palette` | `P.THEMES`, `P.Theme`, `P.lerp_color`, `P.shade`, `P.with_alpha`, `P.UI_PANEL`, `P.UI_WHITE`, `P.UI_GOLD` | `THEMES`, `Theme`, `lerpColor`, `shade`, `withAlpha`, `UI_PANEL`, `UI_WHITE`, `UI_GOLD` | ✅ `core/palette.ts:36, 46, 51, 354, 360, 370` (+ `toHex` at 121, `theme.hex` at 171, `UI_HEX` for Pixi tints) |
+| `palette` | menu-local `_blend_themes` | `blendThemes(a, b, t)` | ✅ `core/palette.ts:182` — see §1.6 |
+| `config` | `GAME_TITLE`, `GAME_SUBTITLE` | same names | ✅ `core/config.ts:46, 47` |
+| `config` | `WINDOW_W/H`, `MAX_DT` | same names | ✅ `core/config.ts:54, 55, 58` |
+| `config` | `UI_BUTTON_W/H` | same names | ✅ `core/config.ts:145, 146` |
+| `config` | `MODE_FREE` | `MODE_FREE` | ✅ `core/config.ts:155` |
+| `config` | **`C.VERSION`** | `VERSION` | ✅ **gap G-M1 is closed**: `export const VERSION = str("VERSION", "1.0.0")` at `core/config.ts:49`, fed by `web/src/data/config.json:124`. Use it; do **not** hard-code `"v1.0.0"` in the scene. |
 | `config` | `C.SCENE_MENU/MODE/LEVELS/HELP/SETTINGS` | `SCENES.MENU/MODE/LEVELS/HELP/SETTINGS` | ✅ but they live in `app/Scene.ts:65-76`, not `core/config.ts` (which does not export `SCENE_*` at all, even though `config.json:84-93` carries them). Use `SCENES`. |
 | `core.contracts` | `clamp`, `dist`, `ease_out_back`, `pulse` | `clamp`, `dist`, `easeOutBack`, `pulse` | ✅ `core/mathx.ts:12, 20, 65, 74` |
-| `core.snake` | `Snake(x, y, heading=, length=)`, `.speed`, `.heading`, `.head_pos()`, `.set_target()`, `.update(dt)`, `.turn_input` | `new Snake(x, y, heading, length)`, `.speed`, `.heading`, `.headPos()` (returns `Vec2`, **not** a tuple), `.setTarget()`, `.update(dt)`, `.turnInput` | ✅ `core/snake.ts:172-242, 299, 200` |
+| `core.snake` | `Snake(x, y, heading=, length=)`, `.speed`, `.heading`, `.head_pos()`, `.set_target()`, `.update(dt)`, `.turn_input` | `new Snake(x, y, heading, length)`, `.speed`, `.heading`, `.headPos()` (returns `Vec2`, **not** a tuple), `.setTarget()`, `.update(dt)`, `.turnInput` | ✅ `core/snake.ts:172` (class), `178-180` (heading/speed), `200` (turnInput), `233` (ctor), `299` (headPos), `481` (setTarget), `548` (reset) |
 | `gfx.background` | `make_background(style, theme, rect)` | `makeBackground(style, theme, rect, renderer)` | ✅ `gfx/bg/index.ts:81` — **extra 4th argument** `game.app.renderer` |
-| `gfx.render` | `draw_glow_circle(surface, x, y, r, col, intensity)` | `glowSprite(r, col, intensity)` / `setGlow(sprite, r, col, intensity)` | ✅ `gfx/textures.ts:255, 272` |
+| `gfx.render` | `draw_glow_circle(surface, x, y, r, col, intensity)` | `glowSprite(r, col, intensity)` / `setGlow(sprite, r, col, intensity)` | ✅ `gfx/textures.ts:255, 272` — **not** `ui/glow.ts`, which is the ui-kit curve (§1.5.2) |
 | `gfx.render` | `draw_snake(surface, snake, theme, t)` | `new SnakeRenderer().draw(snake, theme, t)` | ✅ `gfx/SnakeRenderer.ts:299, 423` |
-| `gfx.particles` | `ambient/ring/trail/stream/draw` | same names, options objects | ✅ `gfx/particles.ts:951, 854, 825, 1118` — option keys match (`colorEnd` for `color_end`) |
-| `gfx.ui` | `Button`, `draw_panel`, `draw_text`, `draw_bar` | — | ⛔ owned by `docs/port/ui.md`; not yet ported |
-| shell | `game.fonts.{huge, body, small, tiny, h2}` | — | ⛔ `FontBook` not ported (ui.md). Faces this scene needs: **huge (96), h2 (30 bold), body (21), small (17), tiny (14)** |
-| shell | `game.audio.play` | `Audio.play(name, volume?)` | ✅ `audio/Audio.ts:318`, but **not on `Game`** — inject via the scene factory as `GameplayScene` does (`main.ts:54`) |
-| shell | `game.save` | `SaveData` | ✅ ported, but **not on `Game`** — inject the same instance `main.ts:41` loads |
-| shell | `game.mouse_pos` | `game.pointer.x / .y` | ✅ `app/Game.ts:62-68` |
-| shell | `game.mode`, `game.difficulty` | `game.mode`, `game.difficulty` | ✅ `app/Game.ts:82-83` |
-| shell | `game.switch_scene(name, **kwargs)` | `game.switchScene(key, args?)` | ✅ `app/Game.ts:184` — `back=C.SCENE_MENU` becomes `{ back: SCENES.MENU }` |
-| shell | `game.quit()` | — | ⛔ **gap G-M3**, see §1.15 |
-| shell | `game.particles` | `game.particles` | ✅ `app/Game.ts:59` (`ParticleSystem` is fully ported) |
-| shell | `game.fx` | `game.post.fx` | ✅ exists (`gfx/post/ScreenFx.ts`), unused by this scene |
+| `gfx.particles` | `ambient/ring/trail/stream` | same names, options objects | ✅ `gfx/particles.ts:951, 854, 825, 1118` — option keys match (`colorEnd` for `color_end`) |
+| `gfx.particles` | `particles.draw(surface)` | — | no counterpart and none wanted: the Pixi system draws itself once `particles.root` (`gfx/particles.ts:537`) is a child of the scene root at the right index (§1.14) |
+| `gfx.ui` | `draw_panel` | `Panel.setRect` / `.setStyle(accent, alpha255, border, glow)` | ✅ `ui/panel.ts:251, 303, 329` — **ported**; takes `theme.accent`, not the theme |
+| `gfx.ui` | `draw_text` | `Label.set` / `.place(x, topY, align)` / `.setColor` / `.setShadow` | ✅ `ui/text.ts:116, 149, 173, 192, 201` — **ported** |
+| `gfx.ui` | `draw_bar` | `Bar.setRect` / `.set(frac, color, nowMs)` | ✅ `ui/bar.ts:126, 165, 194` — **ported** |
+| `gfx.ui` | `Button` | `Button` / `ButtonState` — `handlePointer`, `update(dt, pointer)`, `draw(theme, t)` | ✅ `ui/Button.ts:425, 343, 561, 565, 573` — **ported**; `draw` takes **no `fonts`** argument (the face is bound at construction) |
+| shell | `game.fonts.{huge, body, small, tiny, h2}` | `game.fonts` (`FontBook`) | ✅ **ported** — `gfx/fonts.ts`, instantiated at `app/Game.ts:98`. Faces this scene needs: **huge (96), h2 (30 bold), body (21), small (17), tiny (14)**; `measureWidth(face, text)` replaces `font.size(...)[0]` |
+| shell | `game.audio.play` | `Audio.play(name, volume?)` | ✅ `audio/Audio.ts:318`, but **not on `Game`** — inject via the scene factory as `GameplayScene` does (`main.ts:58`; the menu's own registration is `main.ts:60`) |
+| shell | `game.save` | `SaveData` | ✅ ported, but **not on `Game`** — inject the same instance `main.ts:45` loads |
+| shell | `game.mouse_pos` | `game.pointer.x / .y` | ✅ `app/Game.ts:109-115` (`PointerState`) |
+| shell | mouse events → `Button.handle_event` | `game.uiEvents` (pointer edges, drained per frame) | ✅ `app/Game.ts:122`, cleared at `app/Game.ts:349` |
+| shell | `KEYDOWN` → `handle_event` | `game.keyEvents` (key edges) / `game.keysDown` | ✅ `app/Game.ts:124, 126`, cleared at `app/Game.ts:350` |
+| shell | `game.mode`, `game.difficulty` | `game.mode`, `game.difficulty` | ✅ `app/Game.ts:138, 139` |
+| shell | `game.switch_scene(name, **kwargs)` | `game.switchScene(key, args?)` | ✅ `app/Game.ts:254` — `back=C.SCENE_MENU` becomes `{ back: SCENES.MENU }` |
+| shell | `game.quit()` | — | ⛔ **gap G-M3**, see §1.15 and Q-M1 |
+| shell | `game.particles` | `game.particles` | ✅ `app/Game.ts:88` (`ParticleSystem` is fully ported) |
+| shell | `game.fx` | `game.post.fx` | ✅ exists (`gfx/post/ScreenFx.ts`), **and this scene never touches it** |
 
 `levels.json` is **not** read by this scene. `story.json` is read only via `core/story`
 accessors, `difficulty.json` only via `getDifficulty`, `themes.json` via `THEMES`.
@@ -994,10 +1158,23 @@ accessors, `difficulty.json` only via `getDifficulty`, `themes.json` via `THEMES
 
 ### 1.18 Capture cross-check — `captures/01-menu.png`
 
-Shot conditions, from `tools/screenshot.py:218-223`: `switch_scene(SCENE_MENU)`, then
-`settle(70, mouse=(640.0, 300.0))`, then one more frame in `shoot()` — so the frame is at
+Shot conditions, from `tools/screenshot.py:221-223`: `switch_scene(SCENE_MENU)`, then
+`settle(70, mouse=(640.0, 300.0))`, then one more frame in `shoot()` — so with
+`DT = 1/C.FPS = 1/60` (screenshot.py:43) the frame is at
 **`_t = _entered = 71/60 ≈ 1.183 s`**, well past every entrance (last finishes at 0.82 s) and
-past the 0.55 s transition wipe, and before the first shockwave ring (due at `_t = 2.9`).
+past the 0.55 s transition wipe (`C.TRANSITION_TIME`, config.py:178), and before the first
+shockwave ring (due at `_t = 2.9`).
+
+**Save state at shot time.** `_seed_save` (screenshot.py:129-140) unlocks all 12 levels, records
+levels 0-7 and sets `highscore = 4210` — it never touches `story_progress`. The
+`set_story_progress(4)` call is at screenshot.py:228, i.e. **after** this shot. The values the
+menu reads therefore come from the persisted capture save, `captures/screenshot-save.json`,
+which a previous run's `Game.shutdown` wrote and `Game(headless=True)` reloads through the
+redirected `C.SAVE_PATH` (screenshot.py:120-124). Read back, that file carries
+`story_progress: 4`, `story_complete: false`, `difficulty: "expert"`, `mode: "story"`,
+`highscore: 4210`, 8 `best` entries and `stars` summing to 17 — which is exactly what is on
+screen. Anyone regenerating the captures on a clean checkout with no `screenshot-save.json`
+will get `PLAY`, `CHOOSE STORY OR FREE PLAY`, `NOT STARTED` and a `NORMAL` badge instead.
 
 Everything on screen, accounted for:
 
@@ -1007,26 +1184,37 @@ Everything on screen, accounted for:
 | Cyan fringe left of the glyphs, magenta fringe right | `art.left = shade(accent, 0.85)` at `x - split`; `art.right = shade(accent2, 0.85)` at `x + split`; theme 0 accent = `(0,236,255)`, accent2 = `(255,60,190)` | ✅ |
 | Broad soft glow bar behind the letters, cyan→magenta left to right | the 9 `draw_glow_circle` stamps, `lerp(accent, accent2, i/8)` | ✅ |
 | `A MOUSE-DRIVEN ARCADE ODYSSEY   -   NEON GRID`, centred, ≈y 218-246 | tagline at `(640, 218)`, `fonts.body` (28 px box); `theme.name` = `Neon Grid` because `_t = 1.18 < 8.6 s` so the carousel is still on index 0 | ✅ exact |
-| `STORY  -  CHAPTER II  -  05 SOMETHING IN THE TRENCH` at ≈y 285 | `_play_caption()` story branch at `(640, 277)`, `fonts.small` (23 px box). The capture-run save has `story_progress = 4` (written by the *mode-select* step of a previous run, then persisted to `captures/screenshot-save.json` by `Game.shutdown`), so `get_chapter(4).roman = "II"` and `get_beat(4).number = 5` | ✅ |
+| `STORY  -  CHAPTER II  -  05 SOMETHING IN THE TRENCH` at ≈y 285 | `_play_caption()` story branch at `(640, 277)`, `fonts.small` (421 x 23 ink). With `story_progress = 4`: `get_chapter(4).roman = "II"`, `get_beat(4).number = 5`, `get_beat(4).title = "Something in the Trench"` — the exact string reproduces | ✅ exact |
 | Button 0 reads `CONTINUE`, not `PLAY` | `_play_label()` → `_story_in_progress()` is true (`story_progress = 4 > 0`, `story_complete` false) | ✅ |
 | Five buttons at y 307/378/449/520/591, 300 x 58, all at x = 490 | `BUTTON_TOP = 336`, `BUTTON_PITCH = 71`, entrance over at 0.82 s | ✅ exact |
 | `HOW TO PLAY` / `SETTINGS` are dimmer with a thin outline; `QUIT` is red-outlined | `style="ghost"` and `style="danger"` (ui.md owns the styles) | ✅ |
 | No button shows a hover state | the harness parks the cursor at `(640, 300)`, which is **7 px above** button 0's rect top (307), so `collidepoint` is false. The shot's own note says "PLAY hovered" — **the note is wrong**, the buttons are all idle | ⚠ note is stale, not the pixels |
-| `DIFFICULTY` at ≈(806, 305) and a red-outlined `EXPERT` pill at ≈(806, 321), 75 x 30 | badge at `(806, 320)`, 75 x 31; label at `(806, 303)`. `game.difficulty` was left on `expert` by the previous capture run's settings pass; `expert.color = (255, 84, 132)` | ✅ |
+| `DIFFICULTY` at ≈(806, 305) and a red-outlined `EXPERT` pill at ≈(806, 321), 75 x 30 | badge at `(806, 320)`, 75 x 31; label at `(806, 303)`. `game.difficulty` is `"expert"` from `captures/screenshot-save.json`, which `Game.__init__` loads and `main.py:499` wrote on a previous run; `expert.color = (255, 84, 132)` (difficulty.py:279) | ✅ |
+| The pill's ends are **fully round**, not softly cornered | `border_radius = h // 2 = 15` on a 31 px-high rect (menu.py:210-211) — a true stadium. This is the pixel evidence that a `Panel` (fixed `C.UI_CORNER`) cannot stand in for it | ✅ |
 | Bottom-left panel x≈33-320, y≈516-686, with BEST SCORE `4,210`, `CHAPTER II OF IV`, `STARS 17 / 36`, a gold bar, `LEVELS CLEARED 8 / 12` | panel `(34, 516, 286, 170)`; `_seed_save` sets `highscore = 4210` and records levels 0-7 with stars 3,2,1,3,2,1,3,2 = **17** of `12*3 = 36`, so `progress()` = `(8, 12)`; bar `frac = 17/36 = 0.472` of 250 px ≈ 118 px, which matches the fill | ✅ exact |
 | `MOUSE STEERS - RIGHT-CLICK BOOSTS - ENTER PLAYS` centred at ≈y 705, `v1.0.0` bottom-right | footer at `(640, 694)` / `(1260, 694)`, `fonts.tiny` (19 px box) | ✅ |
 | Bright cyan/white snake from ≈(760, 262) down-left to a tail tip ≈(480, 490), passing **behind** `HOW TO PLAY` and behind the PLAY caption | demo snake, drawn at layer 4 — under the wordmark, buttons, badge and panel | ✅ confirms the layer order in §1.14 |
 | A comet-tail haze along the snake, teal at the head fading to blue | `particles.trail(..., snake_a → snake_b, ribbon=0.3)`, drawn at layer 3, i.e. **under** the snake | ✅ confirms the menu's particle/snake inversion vs gameplay |
 | Scattered pale blue-white motes and 4-point twinkles across the whole frame | `particles.ambient(rate=9, twinkle=0.3)` in `lerp(accent, accent2, 0.5) = (127, 148, 222)`; plus the grid background's own 150 static stars | ✅ |
-| Perspective grid, horizon glow, jagged magenta/cyan ridge lines | `bg_style = "grid"` (`GridBackground`, `background.py:612-720`) — owned by `docs/port/background-framework-1-4.md` | ✅ not this scene's geometry |
-| A hard-edged magenta bar, x 584-696, y 116-118 | **the grid background's retro-sun slat, i = 6** (`background.py:640-644`): `y = _MARGIN + h*0.32 - h*0.055 - 6*(h*0.017) = _MARGIN + 117.36`, `half = sqrt(1 - (6/7)²)*720*0.15 = 55.6` → `640 ± 55.6` = 584.4..695.6, width 3, colour `shade(accent2, 0.9 - 0.54)`. Measured pixels agree to the pixel. It *reduces* the green channel, which is why it cannot be the wordmark's additive fringe | ✅ background, not MenuScene |
-| `60.0 fps` top-right | shell FPS read-out, `main.py:435-441`, forced to `C.FPS` by `Shooter.shoot` (`screenshot.py:159`) | ✅ shell |
-| A small reticle glyph near the top of `CONTINUE` | shell cursor (`Game._draw_cursor`), re-enabled for the shot by `screenshot.py:154-157`, at `mouse_pos = (640, 300)` | ✅ shell |
+| Perspective grid, horizon glow, jagged magenta/cyan ridge lines | `bg_style = "grid"` (`GridBackground`, `background.py:614-724`) — owned by `docs/port/background-framework-1-4.md` | ✅ not this scene's geometry |
+| A hard-edged magenta bar, x 584-696, y 116-118 | **the grid background's retro-sun slat, i = 6** (`background.py:640-644`): `horizon = h*0.32` (background.py:629), so `y = _MARGIN + h*0.32 - h*0.055 - 6*(h*0.017) = _MARGIN + 117.36` with `_MARGIN = 36` (background.py:79); `half = sqrt(1 - (6/7)²)*720*0.15 = 55.63` → `640 ± 55.63` = 584.4..695.6, width 3, colour `shade(accent2, 0.9 - 6*0.09) = shade(accent2, 0.36)`. Measured pixels agree to the pixel. It *reduces* the green channel, which is why it cannot be the wordmark's additive fringe | ✅ background, not MenuScene |
+| `60.0 fps` top-right | shell FPS read-out, `main.py:435-441`, with `game.fps` forced to `C.FPS` by `Shooter.shoot` (`screenshot.py:161`). **Note the gate:** `C.SHOW_FPS` is `False` today (config.py:232) and nothing in `tools/` flips it, so a fresh capture run would **not** draw this. It was `True` until commit `19513eb`, which is when the shipped PNG was taken — the capture is one commit stale in this one respect. Ignore the read-out; do not port it into the scene | ⚠ stale capture artefact, shell-owned either way |
+| A small reticle glyph near the top of `CONTINUE` | shell cursor (`Game._draw_cursor` → `ui.py:593`), re-enabled for the shot by `screenshot.py:156-158` (`game.headless = False`), at `mouse_pos = (640, 300)`; the trail is 14 identical points because the harness never moves the mouse | ✅ shell |
 | Soft vignette + faint CRT bezel at the frame edges | `fx.present` post-chain, `main.py:432` | ✅ shell |
 
-**Nothing in the capture is unaccounted for.** Two things worth carrying forward: the shot's
-note string is stale (no button is hovered), and the "unexplained magenta bar" is a background
-sun slat, not a title artefact — do not chase it in the wordmark port.
+**Nothing in the capture is unaccounted for** — re-read against the pixels on this audit pass and
+every row above still holds. Four things worth carrying forward:
+
+1. the shot's own note string ("title screen, PLAY hovered") is **wrong** — the cursor parks 7 px
+   above button 0's rect and no button is in a hover state;
+2. the "unexplained magenta bar" is a background sun slat, not a title artefact — do not chase
+   it in the wordmark port;
+3. the `60.0 fps` read-out cannot be reproduced today (`C.SHOW_FPS = False`), so it is not a
+   parity target;
+4. everything story-shaped on this screen (`CONTINUE`, the chapter caption, `CHAPTER II OF IV`,
+   the `EXPERT` badge) depends on `captures/screenshot-save.json` surviving, **not** on anything
+   the capture script does before the shot. A port-side screenshot harness has to seed the same
+   values explicitly or the two images will never match.
 
 ---
 
@@ -1044,24 +1232,37 @@ must, in this order:
 6. `spawnDemo()` — reset (or rebuild) the `Snake`, pick the first target, `demoTimer = 0`,
    `demoHairpins = 0`;
 7. `buildButtons()` — re-evaluate `playLabel()`, rebuild the five `Button`s and their base
-   rects, and reset each button's hover/press animation state to 0;
-8. borrow `game.particles.root` into the scene root at index 2.
+   rects, **and reset each button's `hovered` / `justEntered` / `hoverT` / `pressT` / armed state
+   to its initial value** (`ui/Button.ts:347-350` via `ButtonState`). Python gets this for free by
+   constructing brand-new `Button` objects every entry (menu.py:331-340); a port that keeps the
+   five instances alive across entries must zero them by hand, or the menu comes back with the
+   glow still lit on whatever the player last hovered;
+8. borrow `game.particles.root` into the scene root, directly above the background container and
+   directly below the snake (§1.14).
 
 Deliberately **not** reset: the RNG (see §1.3). Deliberately **not** cleared:
 `game.particles` — motes carry across the transition, as in Python.
 
-`onExit` must: destroy and clear the backgrounds, and return `game.particles.root` to the shell.
+`onExit` must: destroy and clear the backgrounds (removing each `bg.root` from its parent first),
+and return `game.particles.root` to the shell. It must **not** call `particles.clear()`.
+
+`onResize` must: drop the cached backgrounds, because they are built to `viewport.overscan`
+(§1.4). Python has no equivalent — its backgrounds are built to the fixed design box.
 
 ---
 
 ### 1.20 Open questions
 
-* **Q-M1 — `QUIT` on the web.** `game.quit()` has no browser equivalent (§1.15). Hide, relabel,
-  or route to a farewell card? Whichever, the save flush that `Game.shutdown` performs
-  (main.py:495-504) needs a `pagehide`/`visibilitychange` home in the shell regardless.
+* **Q-M1 — `QUIT` on the web.** `game.quit()` has no browser equivalent (§1.15). The port
+  currently makes the button call `save.save()` and nothing else (`MenuScene.ts:338-343`), which
+  is silent to the player: it looks broken. Hide it, relabel it, or route it to a farewell card —
+  and note that whichever is chosen, the rest of `Game.shutdown` (mirroring `audio.muted`,
+  `display_mode`, `difficulty`, `mode` into the save, main.py:495-504) still needs a
+  `pagehide`/`visibilitychange` home in the shell.
 * **Q-M2 — the hover cue.** Python effectively suppresses it whenever the pointer moves into a
-  rect (§1.16). The port's pointer model will fire it every time. Match the desktop quirk, or
-  accept the louder behaviour? Pick one and note it in the code.
+  rect (§1.16). The port's pointer model fires it every time, and the shipped `MenuScene.ts:596-598`
+  takes that louder behaviour without comment. Match the desktop quirk, or accept the louder
+  behaviour? Pick one and note it in the code — right now it is an accident, not a decision.
 * **Q-M3 — background memory at overscan.** Twelve stages sized to `viewport.overscan` cannot
   all live at once. Python's ≤3 window is the answer, but `onResize` invalidates the cache mid-
   cross-fade; confirm that rebuilding the *pair* on resize is acceptable (a one-frame hitch on
@@ -1074,6 +1275,34 @@ Deliberately **not** reset: the RNG (see §1.3). Deliberately **not** cleared:
 * **Q-M6 — `_play_label()` is evaluated once per entry** (§1.9.1). Harmless today. If the port
   ever lets the save mutate while the menu is open (cloud sync, another tab), the label goes
   stale. Leave as-is, or recompute on a save-changed event?
+
+---
+
+### 1.21 Where the shipped port departs from this spec
+
+`web/src/scenes/MenuScene.ts` (commit `20f4f5b`) is a close port — the constants, the geometry,
+the carousel maths, the demo-snake state machine, the entrance timings, the layer order and the
+`uiEvents`-before-`update` ordering all match. These are the differences found on this audit
+pass. Each is a change to the **port**, not to the Python; nothing here licenses editing
+`snake/`.
+
+| # | Divergence | Python / spec | Port | Verdict |
+|---|---|---|---|---|
+| D1 | RNG reseeded on entry | `_rng` is seeded once in `__init__` and never reset (§1.3), so the attract mode never repeats | `onEnter` does `this.rng = makeRng(0xc0ffee)` (`MenuScene.ts:257`) | **bug.** Every visit to the menu now replays the identical demo wander. Move the seeding to the constructor. |
+| D2 | Particles cleared on exit | Python's menu never calls `particles.clear()` (§1.16); motes and ring outriders drift across the transition | `onExit` calls `this.game.particles.clear()` (`MenuScene.ts:275`) | **behaviour change.** The transition out of the menu now starts from an empty field. Drop the call, or record it as an intentional choice. |
+| D3 | Wrong glow curve | `draw_glow_circle` is the **render-layer** glow → `glowSprite`/`setGlow` (`gfx/textures.ts:255, 272`, §1.5.2) | wordmark stamps and badge halo use `uiGlowSprite`/`setUiGlow` (`MenuScene.ts:162, 171, 677, 756`) | **visual change**, not cosmetic naming: different falloff and different quantisation. |
+| D4 | Button state survives entry | Python builds five brand-new `Button`s per entry (menu.py:331-340), zeroing hover/press | the five `Button`s are built once in the constructor; `onEnter` only re-sets button 0's label (`MenuScene.ts:262`) | **bug.** Re-entering the menu keeps the previous visit's `hoverT`/`pressT`. See §1.19 step 7. |
+| D5 | Badge is not a pill | `border_radius = h // 2 = 15` — a full stadium (§1.10.1, confirmed in the capture) | `new Panel(12)` (`MenuScene.ts:127`), a 12 px corner | **visual change.** Needs a `Graphics` stadium, not `Panel`. |
+| D6 | Badge halo radius | `badge.width * 0.75` = 56.25 for EXPERT (menu.py:754-756) | `uiGlowSprite(60, ...)` at construction, then `setUiGlow(..., w * 0.75, ...)` per frame (`MenuScene.ts:171, 756-761`) | fine — the per-frame call wins; the constructor's 60 is only the initial texture. |
+| D7 | `QUIT` | `game.quit()` (§1.15) | `save.save()` (`MenuScene.ts:342`) | open — see Q-M1. |
+| D8 | Float coordinates | Python `int()`-truncates every text and blit position (`ui.py:281`) | floats throughout (`MenuScene.ts:666, 683, 690`) | **accepted** per the settled float-coordinate convention. Expect ≤1 px offsets against the capture; do not re-litigate. |
+
+Two things the port gets right that are easy to regress, so they are worth a test:
+
+* it drains `game.uiEvents` **before** `Button.update` (`MenuScene.ts:364-368` then `380`), which
+  is what reproduces Python's event-pump-then-update ordering (§1.16);
+* it builds every background at `viewport.overscan` and drops the cache in `onResize`
+  (`MenuScene.ts:280, 303`), keeping the ≤3 eviction window (`MenuScene.ts:407-418`).
 ## 2. Mode select (`ModeSelectScene`)
 
 **Ground truth:** `E:/SnakeGame/snake/scenes/mode_select.py`, lines 1-1013 (whole file).
@@ -2898,8 +3127,8 @@ The UI kit call sites recorded here (`draw_panel`, `draw_text`, `Button`) are sp
 | TS registry key | `SCENES.PAUSE = "pause"` | `web/src/app/Scene.ts:70` |
 | `transparent` | `True` - the scene below is still drawn | pause.py:57 |
 | `blocks_update` | `True` - the scene below does not advance | pause.py:58 |
-| Pushed by | `GameplayScene._pause()` -> `game.push_scene(C.SCENE_PAUSE)`, **no kwargs** | gameplay.py:523-531 |
-| Pushed on | HUD pause button `PAUSE_RECT = (886, 32, 70, 38)` click, or `Esc` / `P` keydown | gameplay.py:506-513 |
+| Pushed by | `GameplayScene._pause()` -> `game.push_scene(C.SCENE_PAUSE)`, **no kwargs** | gameplay.py:523-530 |
+| Pushed on | HUD pause button `PAUSE_RECT = (886, 32, 70, 38)` click, or `Esc` / `P` keydown | gameplay.py:506-513; rect at gameplay.py:133 |
 | Pushes | `C.SCENE_SETTINGS` with `back=C.SCENE_PAUSE` (a *push*, stack depth 3) | pause.py:238 |
 | Switches to | `C.SCENE_GAME` (restart), `C.SCENE_LEVELS`, `C.SCENE_MENU` | pause.py:203-224 |
 | Pops itself | on RESUME | pause.py:191 |
@@ -3816,14 +4045,22 @@ widgets for. `docs/port/integration.md` §6.1 owns the producing side of `game.l
 | Python | TS |
 |---|---|
 | `_ResultScene` | `web/src/scenes/result/ResultScene.ts` → `export abstract class ResultScene extends Scene` |
-| `_mute`, `_mute_theme` | `web/src/scenes/result/muteTheme.ts` → `mute(rgb, grey?, dark?)`, `muteTheme(theme)` |
-| `_fmt_time`, `_fmt_delta` | `web/src/scenes/result/format.ts` → `fmtTime(s)`, `fmtDelta(n)`, `fmtThousands(n)` |
+| `_mute`, `_mute_theme` | **already ported** — `web/src/ui/muteTheme.ts:27,43` → `mute(rgb, grey?, dark?)`, `muteTheme(theme)`. Do **not** author a second copy under `scenes/result/`; import from `../../ui/muteTheme` |
+| `_fmt_time`, `_fmt_delta` | `web/src/scenes/result/format.ts` → `fmtTime(s)`, `fmtDelta(n)` |
+| `"{:,}"` grouping | **exists but is private** — `grouped()` in `web/src/ui/hud/Hud.ts:98-100`, and inlined a second time at `MenuScene.ts:793`. Promote it to a shared export rather than writing a third copy (§6.2.4) |
 | `_star_points`, `_draw_star`, `_draw_badge` | `web/src/scenes/result/decor.ts` → `starPoints`, `StarSprite`, `BadgeSprite` (Pixi display objects, not draw calls — see §6.2.8) |
 | `GameOverScene` / `VictoryScene` | `web/src/scenes/result/GameOverScene.ts` / `VictoryScene.ts` (§7, §8) |
 
-Constructor signature follows the shipped convention in `web/src/main.ts:54`
+Constructor signature follows the shipped convention in `web/src/main.ts:58`
 (`new GameplayScene(g, save, sound)`): `new GameOverScene(game, save, sound)` — `SaveData`
 and `Audio` are injected, they are **not** fields on `Game`.
+
+**The UI kit is ported.** These screens are built on it, not on new widgets: `Panel`
+(`ui/panel.ts:251`, `setRect` 303 / `setStyle` 329), `Label` (`ui/text.ts:116`, `set` 149 /
+`place` 173 / `setColor` 192 / `setAlpha` 197 / `setShadow` 201 / `setScale` 210, plus
+`textWidth` 129 / `textHeight` 131), `Button` + `ButtonState` (`ui/Button.ts:425` / `343`,
+`handlePointer` 561 / `update` 565 / `draw` 573 / `setEnabled` 557, `hits` 332), and the font
+book `game.fonts` (`gfx/fonts.ts`, wired at `app/Game.ts:98`). Nothing in §6 needs a new widget.
 
 ---
 
@@ -3836,10 +4073,11 @@ and `Audio` are injected, they are **not** fields on `Game`.
 | `STAR_FIRST` | `0.85` s | gameover.py:88 | when star 0 pops | no |
 | `STAR_GAP` | `0.55` s | gameover.py:89 | gap between consecutive star pops | no |
 | `STAR_POP` | `0.55` s | gameover.py:91 | duration of one star's pop animation | no |
-| `BUTTON_H` | `C.UI_BUTTON_H` = `58` | gameover.py:93 | button height for every row on both screens | **yes** — `C.UI_BUTTON_H` (`config.ts:144`, `config.json:120`) |
+| `BUTTON_H` | `C.UI_BUTTON_H` = `58` | gameover.py:93 | button height for every row on both screens | **yes** — `C.UI_BUTTON_H` (`config.py:176`; `config.ts:146`, `config.json:120`) |
 | `_MAX_BEAT` | `max(0, LEVEL_COUNT - 1)` = `11` | gameover.py:97 | upper bound for `_mark_beat`'s index guard | derived from `LEVEL_COUNT` (`core/level.ts:265`) |
-| `C.WINDOW_W`, `C.WINDOW_H` | `1280`, `720` | config.py:28-29 | used for centring and for the background rect | **yes** (`config.ts:52-53`) |
-| `C.MAX_DT` | `1/20` = `0.05` s | config.py:60 | `update` clamps dt to this | **yes** (`config.ts:56`) |
+| `C.WINDOW_W`, `C.WINDOW_H` | `1280`, `720` | config.py:28-29 | used for centring and for the background rect | **yes** (`config.ts:54-55`) |
+| `C.MAX_DT` | `1/20` = `0.05` s | config.py:60 | `update` clamps dt to this | **yes** (`config.ts:58`) |
+| `C.UI_CLICK_COOLDOWN` | `0.10` s | config.py:177 | `Button`'s post-click debounce; ui.md owns it, listed here because every transition below passes through it | **yes** (`config.ts:148`, `config.json:122`) |
 
 ---
 
@@ -3856,11 +4094,14 @@ out     = shade( lerp_color((r,g,b), (lum,lum,lum), grey), dark )
 ```
 
 * `lerp_color` and `shade` are `lerpColor` / `shade` in `core/palette.ts:36,46`; both already
-  truncate each channel through `clamp8`, so the TS result is bit-identical provided `lum`
-  uses `Math.trunc`.
+  truncate each channel through `clamp8` (`palette.ts:30-33`), so the TS result is bit-identical
+  provided `lum` uses `Math.trunc`.
 * Exception fallback `(90, 96, 110)` (gameover.py:108) is not a theme colour and not in
-  `palette.ts`; port it as a module-local literal `MUTE_FALLBACK: RGB = [90, 96, 110]` with a
-  comment that it is only reachable from a malformed colour.
+  `palette.ts`.
+
+**Already ported.** `ui/muteTheme.ts:27` is a faithful `mute()`: `Math.trunc` on the luminance
+(line 32), the `[90, 96, 110]` fallback as a module-local `FALLBACK` (line 19), guarded by
+`Number.isFinite` on all three channels rather than by a `try` (line 31). Nothing to write.
 
 #### 6.2.2 `_mute_theme(theme) -> Theme` (gameover.py:113-132)
 
@@ -3886,13 +4127,15 @@ unchanged**, all twelve colour fields are replaced:
 On any exception the *original* theme is returned (gameover.py:131-132), i.e. the screen
 silently plays at full saturation rather than crashing.
 
-**TS port note (must not be missed):** `Theme` in `core/palette.ts:146-172` is a readonly
-interface carrying a precomputed `hex: ThemeHex` mirror. A muted copy built with object spread
-would keep the *unmuted* `hex` block, and every renderer that reads `theme.hex.*` (arena
-frame, backgrounds, snake) would paint at full saturation while the vector text painted muted.
-`muteTheme` must rebuild `hex` with `toHex` for all twelve fields — the same 12-field
-`buildTheme` tail at `palette.ts:232-245`. Cheapest correct shape: extract that tail into a
-`withHex(colors): Theme` helper and call it from both `buildTheme` and `muteTheme`.
+**TS port note:** `Theme` in `core/palette.ts:146-172` is a readonly interface carrying a
+precomputed `hex: ThemeHex` mirror. A muted copy built with object spread would keep the
+*unmuted* `hex` block, and every renderer that reads `theme.hex.*` (arena frame, backgrounds,
+snake) would paint at full saturation while the vector text painted muted. **This is already
+handled:** `ui/muteTheme.ts:43-87` rebuilds all twelve `hex` entries with `toHex` (lines
+72-85), mirroring the `buildTheme` tail at `palette.ts:305-318`, and carries `name` and
+`bgStyle` through unchanged (58-59). The one thing `muteTheme` does *not* reproduce is the
+Python's `except: return theme` (gameover.py:131-132) — with a well-formed `Theme` there is
+nothing left to throw, so that is correct, not an omission.
 
 `_mute_theme` is used by `GameOverScene._build_theme` only (gameover.py:715-716); `VictoryScene`
 uses the level theme raw via the base `_build_theme` (gameover.py:436-437).
@@ -3915,14 +4158,15 @@ return "{}{:,}".format("+" if n >= 0 else "-", abs(n))
 Produces `+1,240` / `-90` / `+0`. Note the sign is written explicitly and `abs(n)` is
 formatted, so `-0` is impossible.
 
-**Port hazard:** `"{:,}"` is a comma-grouped en-US format. `Number.toLocaleString()` follows
-the *browser* locale, so a de-DE device would render `1.240` and an ar-EG device Arabic-Indic
-digits. Write one fixed grouper and use it for every `{:,}` in this file (the delta here, the
-score rows in §6.9, `PAR {:,}` in §6.7, `LEVEL BEST {:,}`):
-
-```
-fmtThousands(n) = Math.trunc(Math.abs(n)).toLocaleString("en-US")   // or a manual /\B(?=(\d{3})+$)/ insert
-```
+**Port hazard:** `"{:,}"` is a comma-grouped en-US format. A bare `Number.toLocaleString()`
+follows the *browser* locale, so a de-DE device would render `1.240` and an ar-EG device
+Arabic-Indic digits. The kit already solves this the right way — `grouped()` in
+`ui/hud/Hud.ts:98-100` is `Math.trunc(value).toLocaleString("en-US")`, with the explicit
+locale — but it is **module-private**, and `MenuScene.ts:793` already had to inline the same
+expression. These screens add four more call sites (the delta here, the score row in §6.9.1,
+`PAR {:,}` in §6.7.2, `LEVEL BEST {:,}` in §6.9.1) plus the victory score in §8. Promote
+`grouped` to a shared export before writing the fifth copy; sign handling stays local to
+`fmtDelta`, which formats `abs(n)` and prepends the sign itself.
 
 #### 6.2.5 `_star_points(cx, cy, radius, rot=0.0) -> [(int,int)] x 10` (gameover.py:153-162)
 
@@ -3960,9 +4204,27 @@ Concrete widths at the sizes `VictoryScene` uses: earned star `radius = 40.0` �
 `0.25 + 0.75*easeOutBack(0) = 0.25` → `radius = 10.0` → rim width `max(1, int(1.0)) = 1`; the
 `radius < 3.0` bail therefore never triggers for an earned star (min radius 10.0).
 
-`draw_glow_circle` (render.py:355-362) is the additive cached-glow primitive; per
-gfx-port-decisions it becomes a white radial sprite with `tint = toHex(color)` and
-`alpha = glow`, blend `"add"`, sized `2 * radius * 1.9`.
+`draw_glow_circle` (render.py:355-362, over `glow_surface` at render.py:310) is the additive
+cached-glow primitive; per gfx-port-decisions it becomes a white radial sprite with
+`tint = toHex(color)` and `alpha = glow`, blend `"add"`, sized `2 * radius * 1.9`. **That
+already exists as a shared export:** `glowSprite(radius, color, intensity)` /
+`setGlow(sprite, radius, color, intensity)` in `gfx/textures.ts:255,272`, over
+`radialTexture` (230). Use those, not `ui/glow.ts::uiGlowSprite` — `ui/glow.ts:1-20` states
+outright that the two primitives are different curves (`render.py` spaces its bands by
+`sqrt(1 - i/n)` and ramps brightness linearly; `ui.py` spaces them linearly and ramps by
+`(1-f)**2.4`), and gameover.py imports the **render.py** one (gameover.py:70). Substituting
+the UI flavour changes the shape of every glow on both result screens.
+
+> **Intensity above 1.0 is real here.** `setGlow` (`textures.ts:279`) clamps `sprite.alpha`
+> into 0..1, while Python's `glow_surface` accepts up to `_GLOW_MAX_INTENSITY = 3.0`
+> (render.py:71) and blends additively, so a value of 1.43 genuinely is brighter than 1.0.
+> `_draw_star`'s earned-star glow peaks at `0.45 + 0.8 + 0.18 = 1.43` at `pop = 0` (§6.8), so
+> the pop's opening flash is the one place on these screens that a single clamped sprite
+> silently loses brightness. Fix it the way `Button` already does
+> (`ui/Button.ts:484-488, 622-624`): two stacked additive sprites, `lo.alpha = min(1, q)` and
+> `hi.alpha = max(0, q - 1)`. Every other glow on
+> both screens peaks below 1.0 (badge 0.34, headings 0.85, victory score 0.55, NEW BEST 0.80)
+> and needs only one sprite.
 
 #### 6.2.7 `_draw_badge(surface, cx, cy, label, color, font, *, glow=0.30) -> Rect` (gameover.py:185-216)
 
@@ -3994,18 +4256,28 @@ chip ≈ 108 x 32 px centred on (640, 236) → `tw ≈ 68`, `th ≈ 20`, `border
 gameover capture shows the same chip at (640, 272).
 
 Python rebuilds this surface every frame (the docstring at 191-193 argues it is one rounded
-rect plus two blits). **Pixi must not:** the chip is a `Graphics` + one `Text`, built in
-`onEnter` when the label/colour are known, and never touched again — the only per-frame value
-is the glow sprite's static alpha, which is also constant (`glow` is 0.16 or 0.34, never
-animated).
+rect plus two blits). **Pixi must not:** the chip is a `Graphics` + one `Label`
+(`ui/text.ts:116`), built in `onEnter` when the label/colour are known, and never touched
+again — the only per-frame value is the glow sprite's static alpha, which is also constant
+(`glow` is 0.16 or 0.34, never animated). Note the chip is *not* a `Panel`: `Panel`
+(`ui/panel.ts:251`) is the frosted card with a rim and a `UI_CORNER` radius, whereas this is a
+capsule whose radius is `h // 2`. Draw it with `Graphics.roundRect`.
+
+Because the chip's width is `int(font.size(text)[0]) + 40`, its geometry depends on the text
+measurement — use `Label.textWidth` / `Label.textHeight` (`ui/text.ts:129,131`) after `set()`,
+or `fonts.measureWidth(style, text)` (`gfx/fonts.ts:301`), never a hard-coded 108x32. The
+`+ 40 / + 12` padding and the `rect.y + 6` text top are the invariants; the size is not.
 
 #### 6.2.8 Summary of the vector-drawing port shape
 
+Every "glow sprite" below is `glowSprite(r, color, intensity)` from `gfx/textures.ts:255`,
+re-pointed with `setGlow` (272); every "text" is a `Label` (`ui/text.ts:116`).
+
 | Python per-frame draw | Pixi object | Rebuild when |
 |---|---|---|
-| `_draw_badge` | `Container{ glowSprite, Graphics(chip), Text }` | `onEnter` only (label, colour, muted flag) |
+| `_draw_badge` | `Container{ glowSprite, Graphics(roundRect chip), Label }` | `onEnter` only (label, colour, muted flag) |
 | `_draw_star` unearned | `Graphics` polyline, 10 float points | `onEnter` only |
-| `_draw_star` earned | `Container{ glowSprite, Graphics(fill+rim) }`, animated by `container.scale` / `container.rotation` / `glowSprite.alpha` | polygon geometry built **once** at `radius = 40`; the pop is a transform, the breathing is `glowSprite.alpha` |
+| `_draw_star` earned | `Container{ glowSprite (x2, see §6.2.6), Graphics(fill+rim) }`, animated by `container.scale` / `container.rotation` / the glow sprites' alpha | polygon geometry built **once** at `radius = 40`; the pop is a transform, the breathing is the glow alpha |
 
 The one wrinkle: the rim stroke width is `max(1, int(radius*0.10))` of the *animated* radius,
 so scaling a `radius = 40` Graphics by 0.25 gives a rim of `4 * 0.25 = 1.0` px where Python
@@ -4021,14 +4293,17 @@ gfx-port-decisions) — do not rebuild the polygon per frame to chase it.
 |---|---|
 | Python class | `_ResultScene(Scene)`, `snake/scenes/gameover.py:222-699` |
 | Registered under | nothing directly — it is abstract. `GameOverScene` → `C.SCENE_GAMEOVER = "gameover"`, `VictoryScene` → `C.SCENE_VICTORY = "victory"` (`config.py:195-196`; registry `main.py:38-39`, both from module `scenes.gameover`) |
-| TS scene keys | `SCENES.GAMEOVER = "gameover"`, `SCENES.VICTORY = "victory"` (`web/src/app/Scene.ts:71-72`) — already present |
+| TS scene keys | `SCENES.GAMEOVER = "gameover"`, `SCENES.VICTORY = "victory"` (`web/src/app/Scene.ts:71-72`) — already present. **Neither is registered yet**: `main.ts:57-65` registers only boot/game/pause/menu/help/preview/uikit |
 | `transparent` | `False` (inherited, `contracts.py:48`) — the result screens are opaque, they paint their own background |
 | `blocks_update` | `True` (inherited, `contracts.py:49`) |
+| TS equivalents of those two flags | `static transparent = false` / `static blocksUpdate = true` on `Scene` (`app/Scene.ts:20,22`), read through the instance getters at 55 and 59. The defaults already match, so **neither result scene declares either** — declaring `static transparent = false` again is noise |
+| Base-class attribute | `self.game` (`contracts.py:52`) → `readonly game: Game` (`app/Scene.ts:24,28-30`). The only inherited instance attribute; everything else in §6.4 is this file's |
 | `veil_alpha` | class attribute, base `120` (gameover.py:232); overridden `168` by `GameOverScene` (708) and `112` by `VictoryScene` (876) |
 | Entered by | `GameplayScene._finish` → `game.switch_scene(C.SCENE_VICTORY if won else C.SCENE_GAMEOVER)` (`gameplay.py:1161`) — **the only real caller**, and it passes **no kwargs** |
 | Also reachable | `SettingsScene._resolve_back` accepts `"gameover"`/`"victory"` as a legal back target (`settings.py:287`), so a settings screen opened *over* a result screen would `switch_scene` back into it. Nothing in the shipped game does that (no settings button on either result screen), but the code path exists and would re-run `on_enter` — replaying the entry sting and the whole reveal. |
 | Exits to | `C.SCENE_GAME`, `C.SCENE_LEVELS`, `C.SCENE_MENU`, `C.SCENE_STORY` (the last only from `VictoryScene._story_continue`) — see §6.13 |
-| Instances | cached and reused by `Game._make_scene` (`main.py:285-300`) — `on_enter` must reset everything |
+| Instances | cached and reused by `Game._make_scene` (`main.py:285-300`); the TS `Game.makeScene` caches identically (`app/Game.ts:240-248`) — `on_enter` / `onEnter` must reset everything |
+| Entry is synchronous | `switch_scene` (`main.py:307-314`) pops-and-exits the whole stack, makes the scene, calls `on_enter(**kwargs)`, then `fx.begin_transition()`. `Game.switchScene` (`app/Game.ts:254-269`) does the same and additionally calls `scene.onResize()` between `onEnter` and `beginTransition` — so any layout that depends on `viewport.overscan` belongs in `onResize`, not `onEnter` |
 
 ---
 
@@ -4043,16 +4318,16 @@ next entry.
 | `theme` | `P.Theme` | `P.THEMES[0]` | 236 | **yes** — `self.theme = self._build_theme()` (413) |
 | `buttons` | `List[Button]` | `[]` | 237 | **yes** — `self.buttons = self._build_buttons()` (419); see the latent bug below |
 | `result` | `Dict[str, Any]` | `{}` | 238 | **yes** — rebuilt in `_read_result` (270) |
-| `level_index` | `int` | `0` | 243 | yes (280) then possibly overridden by kwarg (405) |
-| `level_name` | `str` | `""` | 244 | yes (286) |
-| `score` | `int` | `0` | 245 | yes (287) |
-| `food_eaten` | `int` | `0` | 246 | yes (289) |
-| `goal_food` | `int` | `1` | 247 | yes (288) |
-| `stars` | `int` | `0` | 248 | yes (290) |
-| `new_best` | `bool` | `False` | 249 | yes (294) |
-| `max_combo` | `int` | `0` | 250 | yes (291) |
-| `deaths` | `int` | `0` | 251 | yes (292) |
-| `elapsed` | `float` | `0.0` | 252 | yes (293) |
+| `level_index` | `int` | `0` | 241 | yes (280) then possibly overridden by kwarg (405) |
+| `level_name` | `str` | `""` | 242 | yes (286) |
+| `score` | `int` | `0` | 243 | yes (287) |
+| `food_eaten` | `int` | `0` | 244 | yes (289) |
+| `goal_food` | `int` | `1` | 245 | yes (288) |
+| `stars` | `int` | `0` | 246 | yes (290) |
+| `new_best` | `bool` | `False` | 247 | yes (294) |
+| `max_combo` | `int` | `0` | 248 | yes (291) |
+| `deaths` | `int` | `0` | 249 | yes (292) |
+| `elapsed` | `float` | `0.0` | 250 | yes (293) |
 | `mode` | `str` | `C.MODE_FREE` | 253 | yes (296, via `_read_mode`) |
 | `diff` | `D.Difficulty` | `D.get_difficulty(None)` | 254 | yes (297-298) |
 | `star_targets` | `Tuple[int,int,int]` | `(1, 2, 3)` | 255 | yes (336, via `_derive`) |
@@ -4064,6 +4339,17 @@ next entry.
 | `_bg` | `Background \| None` | `None` | 262 | **no, deliberately** — cached art, invalidated only by a style/theme change (`_ensure_background`, 464-482) |
 | `_bg_style` | `str` | `""` | 263 | no — cache key |
 | `_bg_theme_name` | `str` | `""` | 264 | no — cache key |
+| `game` | `Game` | the constructor argument | contracts.py:52 | inherited from `Scene`; never reassigned |
+
+**Completeness check.** A grep of the whole file for `self.<name> =` returns exactly the
+assignments at 270, 280, 282, 286-294, 296-297, 334-337, 339-342, 405, 412-413, 419, 426,
+477-482 (base) and 736-737, 769, 918-923, 1048, 1105 (subclasses). The compound assignments
+`self.t += dt` (586), `self._ember_acc += / -=` (749, 753), `self._confetti_acc += / -=`
+(1049, 1052) and `self._stars_shown += 1` (1032) touch no new names. Every attribute
+therefore appears in the two tables here; there is no hidden state.
+
+`veil_alpha` is a **class** attribute (232, overridden at 708 and 876), not instance state —
+in TS a `protected readonly veilAlpha` on the subclass, not something `onEnter` resets.
 
 Subclass state, for completeness (reset in `_on_ready`, which the base calls last):
 
@@ -4135,6 +4421,16 @@ result scene gets **no `update()` that frame** but **is drawn** (`main.py:421-42
 seed `t` with the current frame's dt: the zero state (all counters `0`, all three stars as dim
 outlines, no NEW BEST) must be the first thing on screen for one frame.
 
+The port reproduces this for free. `Game.step` (`app/Game.ts:307-321`) walks the stack the
+same way, holding the outgoing scene in a local and breaking on *its* `blocksUpdate` after the
+stack has already been replaced; then the visibility pass (`Game.ts:323-328`) makes the new
+scene's root visible for that frame. Two consequences worth writing down: the result scene's
+`update` must not be the thing that first positions its display objects — `onEnter` (plus the
+`onResize` that `switchScene` calls right after it, `Game.ts:266`) has to leave the whole zero
+state on screen — and `game.uiEvents` / `game.keyEvents` are cleared at the end of that same
+tick (`Game.ts:349-350`), so the click that ended the run can never leak into the result
+screen's own drain loop.
+
 ---
 
 ### 6.6 Result parsing
@@ -4172,7 +4468,7 @@ else {}`. A local `num(key, default)` coerces via `float`, mapping `None` and
 4. else (`result` empty, i.e. entered cold) → `game.mode` if in `GAME_MODES`, else `MODE_FREE`.
 
 `C.GAME_MODES = (MODE_STORY, MODE_FREE) = ("story", "free")` (`config.py:208-210`). TS:
-`core/save.ts:104` exports `GAME_MODES`; `config.ts:150-151` exports `MODE_STORY` / `MODE_FREE`.
+`core/save.ts:104` exports `GAME_MODES`; `config.ts:154-155` exports `MODE_STORY` / `MODE_FREE`.
 
 #### `_derive()` (330-342)
 
@@ -4191,14 +4487,14 @@ is authoritative about campaign position; the dict's copies are dead weight here
 
 #### `_read_targets(level)` (344-364)
 
-1. If `_result_level == level_index` (no kwarg override happened), take `result["star_targets"]`,
-   coerce the first three entries with `int()`, and accept them **only if** `len == 3 and
-   vals[0] > 0 and vals[0] <= vals[1] <= vals[2]`.
+1. If `_result_level == level_index` (no kwarg override happened), take `result["star_targets"]`
+   (line 354), coerce the first three entries with `int()`, and accept them **only if**
+   `len == 3 and vals[0] > 0 and vals[0] <= vals[1] <= vals[2]`.
 2. Otherwise `D.apply_star_targets(self.diff, level.star_targets())`.
 3. Otherwise `(1, 2, 3)`.
 
 TS: `applyStarTargets(diff, targets)` (`core/difficulty.ts:452`) and `level.starTargets`
-(a precomputed property, `core/level.ts` — **not** a method; integration.md §11).
+(a precomputed readonly property, `core/level.ts:86` — **not** a method; integration.md §11).
 
 #### Mode / story helpers
 
@@ -4216,7 +4512,12 @@ All three are used only by `VictoryScene`'s story hand-off (§8), but they live 
 ### 6.7 Layout the base owns
 
 Coordinates are design pixels in the 1280x720 box. `draw_text`'s `pos[1]` is always the **top**
-edge of the glyph box; `pos[0]` is the left / centre / right edge per `align` (ui.py:268-290).
+edge of the glyph box; `pos[0]` is the left / centre / right edge per `align` (ui.py:268-291).
+`Label.place(x, y, align)` (`ui/text.ts:173`) has exactly those semantics — `y` is the top
+edge, `align` is `"left" | "center" | "right"` — so every `draw_text(surface, s, font, col,
+(x, y), align=…)` below transcribes to `label.set(s); label.setColor(col); label.place(x, y,
+align)` with no coordinate arithmetic in between. That equivalence is the reason the tables in
+this section can be copied literally.
 
 #### 6.7.1 Full-screen layers (base `draw`, 598-610)
 
@@ -4274,8 +4575,8 @@ Note the par line does **not** count up: it always shows the final score's delta
 while the score row above it is still rolling. Verified in both captures (the par line is
 legible in a frame where the score has settled, and the source has no `counted()` call here).
 
-`P.UI_GOOD = (86, 240, 160)` / `P.UI_WARN = (255, 196, 72)` — both exported by
-`core/palette.ts:291,293` as `UI_GOOD` / `UI_WARN`. Do not retype the triples.
+`P.UI_GOOD = (86, 240, 160)` / `P.UI_WARN = (255, 196, 72)` (`palette.py:218-219`) — both
+exported by `core/palette.ts:364,366` as `UI_GOOD` / `UI_WARN`. Do not retype the triples.
 
 `_chapter_line()` (688-699):
 
@@ -4286,7 +4587,7 @@ roman = str(result["chapter_roman"] or "").strip()  or  str(S.get_chapter(level_
 return "CHAPTER {}   -   {}".format(roman, base)     # three spaces, hyphen, three spaces
 ```
 Exception → `base`. TS: `chapter.roman` is a **method**, `getChapter(i).roman()`
-(`core/story.ts:88`; integration.md §11 flags the shim).
+(declared `core/story.ts:92`, implemented 113; integration.md §6.1 flags the shim).
 
 #### 6.7.3 `_row(specs, y, width, gap=24)` — the button row layout (452-461)
 
@@ -4295,7 +4596,9 @@ total = width * len(specs) + gap * (len(specs) - 1)
 x     = (C.WINDOW_W - total) * 0.5                       # 1280
 Button((x + i * (width + gap), y, width, BUTTON_H), label, style=style, data=action)
 ```
-`y` is the row's **top** edge; every button is `BUTTON_H = 58` tall. Empty `specs` → `[]`.
+`y` is the row's **top** edge; every button is `BUTTON_H = 58` tall. Empty `specs` → `[]`. The
+`gap=24` default is **never exercised**: all six rows below pass a gap explicitly (36, 26 or
+22). Port the default anyway, but do not treat 24 as a design value.
 
 Concrete rows (informative cross-reference — §7 and §8 are authoritative for their own
 screens; the arithmetic below is the base's and is what the captures confirm):
@@ -4313,6 +4616,34 @@ screens; the arithmetic below is the base's and is what the captures confirm):
 The width switch in `VictoryScene._build_buttons` is `width=248 if len(specs) == 4 else 268`
 (line 911) with `gap=22` in both cases — hence the final-level free-play row at 268/22, which
 is *not* the 268/26 the game-over row uses. Transcribe both.
+
+**TS call site.** `Button`'s constructor is `new Button(fonts, rect, label, opts)`
+(`ui/Button.ts:450-455`), where `rect` accepts the `[x, y, w, h]` tuple form directly and
+`opts` carries `{ style, data, enabled, font, icon }` (`ButtonOptions`, `ui/Button.ts:314`).
+So `_row` ports as:
+
+```ts
+row(specs, y, width, gap = 24): Button[] {
+  const total = width * specs.length + gap * (specs.length - 1);
+  const x0 = (C.WINDOW_W - total) * 0.5;
+  return specs.map(([label, style, data], i) =>
+    new Button(this.game.fonts, [x0 + i * (width + gap), y, width, C.UI_BUTTON_H], label,
+               { style, data }));
+}
+```
+
+`style` is `ButtonStyle = "primary" | "ghost" | "danger" | "tile"` (`ui/Button.ts:120`) — the
+two styles these screens use, `"primary"` and `"ghost"`, are both legal values, and the label
+face follows from the style (`ghost` → `fonts.body` 21, `primary` → `fonts.h2` 30 bold,
+`ui/Button.ts:511-517`, from `ui.py:493-500`; ui.md owns that mapping). `data` is `unknown`, so
+the action strings go in unchanged. Add `button.root` to the scene's button layer; `Button`
+owns its own display objects and does not need a per-frame rebuild.
+
+Because a `Button` owns display objects, `onEnter` must **destroy** the previous entry's row
+before building the new one (`Button.destroy()`, `ui/Button.ts:668`) — the Python's
+`self.buttons = self._build_buttons()` simply drops the old list for the GC, but in Pixi the
+orphaned children stay parented to the scene's layer and keep drawing under the new row. This
+is the concrete form the "clear before the try block" fix in §6.4 takes.
 
 ---
 
@@ -4365,7 +4696,8 @@ the base's constants and `self.t`.
 | 9 | NEW BEST ping *(game over)* | `1.245` | one-shot | gate `new_best and not _best_ping and count_frac() >= 0.999` | `audio("bonus")` + gold ring at `(640, 250)` (767-772) |
 | 10 | NEW BEST badge swell *(game over)* | `1.350` → `1.800` | `0.450` s | `pop = clamp((t - 1.35)/0.45, 0, 1)`; `scale = 0.7 + 0.3*easeOutBack(pop)` | gold `NEW BEST` plate (846-861) |
 | 11 | late fireworks *(victory)* | `2.600` (when `_confetti` hits 0) → `6.000` | until `t >= 6.0` | per frame, `random() < dt * 1.4` (≈ 2.3 %/frame at 60 fps ⇒ ~1.4 bursts/s) | `_firework(uniform(220, 1060), uniform(140, 420), 0.7)` (1067-1069) |
-| 12 | steady state | `2.500` (victory) / `1.800` (game over) | forever | only `game.time`-driven shimmer remains | — |
+| 12 | last *scheduled* event | `6.000` (victory) / `1.800` (game over) | — | victory: the `elif self.t < 6.0` gate closes (1067) and no further particles are emitted, the live ones dying off within their `life` (≤ 1.2 s for a firework). game over: the NEW BEST swell finishes | — |
+| 13 | steady state | `6.000` + burst life (victory) / never fully (game over) | forever | only `game.time`-driven shimmer, **plus** the embers, which have no stop condition at all: `GameOverScene._emit` spawns ~13/s for as long as the screen is up (746-766) | — |
 
 Everything reachable by input is reachable from `t = 0`: **no button is disabled or delayed**
 and no key is gated on the reveal. A player who mashes Enter at `t = 0.1` skips the whole
@@ -4466,7 +4798,7 @@ Producer: `gameplay.py::_finish` (1115-1151) — cross-checked against integrati
 | `difficulty_color` | 639 | badge colour | `diff.color` → `UI_WHITE` |
 | `difficulty_label` | 653 | badge text, par label | `difficulty_name` → `diff.hud_label` → `"NORMAL"` |
 | `difficulty_name` | 653 | ditto (second choice) | — |
-| `star_targets` | 355 | par (`star_targets[0]`) | `apply_star_targets(diff, level.star_targets())` |
+| `star_targets` | 354 | par (`star_targets[0]`) | `apply_star_targets(diff, level.star_targets())` |
 | `chapter_roman` | 694 | `CHAPTER {roman}` line (story only) | `S.get_chapter(i).roman` |
 
 **Written by `_finish` but never read here:** `won`, `crossings`, `next_index`, `final_level`,
@@ -4481,6 +4813,55 @@ Every key is optional by construction (module docstring, 14-17): a missing or em
 degrades to a zeroed summary, never an exception, "because a crash on the results screen would
 throw away the run the player just finished". Keep that property in TS: the parse must be a
 total function over `Record<string, unknown>`.
+
+#### 6.9.4 The TS producer already exists — and its keys are **camelCase**
+
+This is the single biggest trap in porting this section, and it is invisible until the screen
+renders a zeroed summary over a run the player definitely scored on.
+
+`GameplayWorld.finish(won)` (`web/src/game/GameplayWorld.ts:886-956`) is already written and is
+a faithful port of `gameplay.py::_finish`: same star arithmetic (891-892), same
+`record`/`unlockThrough`/`setStoryProgress`/`setStoryComplete` save side effects (901-905),
+same loss rule that only lifts `highscore` (907-910), the same `save.save()` at 912, same win
+flourish `flash(theme.accent, 0.7)` + `audio(final ? "win" : "levelup")` (917-920). It builds a
+typed
+`RunResult` (`GameplayWorld.ts:132-162`) — **but every key is camelCased**:
+
+| Python key | TS `RunResult` field | Python key | TS field |
+|---|---|---|---|
+| `level_index` | `levelIndex` | `difficulty_name` | `difficultyName` |
+| `level_name` | `levelName` | `difficulty_label` | `difficultyLabel` |
+| `food_eaten` | `foodEaten` | `difficulty_color` | `difficultyColor` |
+| `goal_food` | `goalFood` | `star_targets` | `starTargets` |
+| `new_best` | `newBest` | `next_index` | `nextIndex` |
+| `max_combo` | `maxCombo` | `final_level` | `finalLevel` |
+| `beat_title` | `beatTitle` | `chapter_title` | `chapterTitle` |
+| `beat_speaker` | `beatSpeaker` | `chapter_roman` | `chapterRoman` |
+| `chapter_end` | `chapterEnd` | `story_complete` | `storyComplete` |
+
+`score, stars, won, elapsed, deaths, difficulty, crossings, mode, story, chapter` are spelled
+the same in both. **Every table in §6.6 and §6.9.3 above is written in the Python's spelling**
+— they document the ground truth, not the port. `ResultScene`'s parse must read the TS names.
+The consequence of getting it wrong is not a crash: `num()` returns its default for a missing
+key, so the screen quietly shows `0`, `0 / 1`, `x1`, `0:00`, no stars, and a par delta computed
+against a score of zero.
+
+Three further deltas to close when §7/§8 land:
+
+* **Nothing bridges `world.result` to `game.lastResult`.** `world.result` is a
+  `RunResult | null` field (`GameplayWorld.ts:235`, cleared to `null` on entry at 333) whose
+  only readers in the repo are assertions in `web/tests/gameplay.spec.ts:326-379`, and
+  `game.lastResult` (`app/Game.ts:140`) has no writer at all.
+  `GameplayScene` must copy it across *and* call `switchScene(won ? SCENES.VICTORY :
+  SCENES.GAMEOVER)` — there is no equivalent of gameplay.py:1161 in the ported scene yet, so a
+  finished run currently just stops.
+* `RunResult` types `starTargets` as `readonly [number, number, number]` and `difficultyColor`
+  as `RGB`, so `_read_targets`'s three-element / monotonic validation and `_diff_color`'s
+  `& 0xFF` masking are defensive against a *hand-built* dict only. Keep them anyway —
+  `game.lastResult` is declared `Record<string, unknown>` and a cold entry sees `{}`.
+* `chapterEnd` is derived, not copied: `story.chapterEnd(beat.levelIndex)`
+  (`GameplayWorld.ts:948`), because the TS `StoryBeat` has no `is_chapter_end` field
+  (integration.md §6.1). Irrelevant to §6 — nothing here reads it — but do not "restore" it.
 
 ---
 
@@ -4546,7 +4927,7 @@ The whole body is inside one `try/except: pass` (584, 595-596).
 |---|---|---|
 | `self.t` | **real** | The reveal is UI, not simulation. A `fx.slowmo` still running from the killing blow (gameplay's `fx.slowmo(0.35, 0.45)` on the fatal hit, integration.md §E9) must not stretch the count-up. |
 | `_bg.update` | **real** | Note the divergence from `GameplayScene`, which feeds the background `sdt` (integration.md §5.3). Here the backdrop scrolls at wall-clock rate. |
-| `button.update` | **real** | Hover/press easing is `1 - exp(-13*dt)` / `1 - exp(-22*dt)` (ui.py:507-510); ui.md owns it. Buttons also clamp dt internally to 0.1. |
+| `button.update` | **real** | Hover/press easing is `1 - exp(-13*dt)` / `1 - exp(-22*dt)` (ui.py:460-463); ui.md owns it. Buttons also clamp dt internally to 0.1 (ui.py:453), *inside* the scene's own `C.MAX_DT` clamp, so the tighter of the two wins and the effective ceiling here is 0.05. |
 | `_emit` | **real** | Ember/confetti/firework rates (13/s, 90/s, 1.4/s) and `_confetti -= dt` are all wall-clock. |
 | `game.time` | **real**, shell-owned (`main.py:402`) | Every `pulse(t, ...)` shimmer term and `button.draw`'s idle shimmer. |
 
@@ -4554,8 +4935,31 @@ The whole body is inside one `try/except: pass` (584, 595-596).
 hitch advances `t` by 0.05. The reveal slows, it never skips — which is why every stage is
 expressed as a function of `t` and not of a deadline.
 
-`game.mouse_pos` → `game.pointer.x/.y` in TS (integration.md §11). `Button.update` wants a
-`(x, y)` pair.
+`game.mouse_pos` → `game.pointer.x/.y` in TS (integration.md §11). `Button.update(dt, pointer)`
+(`ui/Button.ts:565`, over `ButtonState.update` at 405) takes the whole `{x, y, touch?}` object,
+so pass `game.pointer` (`app/Game.ts:109`) straight through.
+
+**The one ordering the port must add.** Python gets hover and click edges from the event pump,
+which runs before `update`. The web polls the pointer level and queues the edges, so the scene
+has to drain `game.uiEvents` into `handlePointer` **before** calling `button.update` — that
+ordering is what lets a move write `hovered` before `justEntered` is computed, and what stops
+a mouse that arrives already inside a button from firing the hover cue. `GameplayScene.update`
+is the worked example (`scenes/GameplayScene.ts:228-239`): drain `uiEvents`, drain `keyEvents`,
+then `update`, then `draw`. The result-screen order therefore becomes:
+
+```
+1  drain game.uiEvents  -> for each button, handlePointer(ev); first true wins: audio("click"),
+                           _act(data), and stop draining (Python `return`s at 553)
+2  drain game.keyEvents -> _handleKey, only if no button fired
+3  this.t += dt;  bg.update(dt)
+4  for each button: update(dt, game.pointer)  [justEntered -> audio("hover", 0.6)];  draw(theme, game.time)
+5  this._emit(dt)
+```
+
+Steps 3-5 are the Python `update` verbatim; steps 1-2 are Python's `handle_event`, hoisted
+into `update` because that is where the web's edges are available. `Button.draw(theme, t)`
+(`ui/Button.ts:573`) is called from `update` in this port, not from a separate draw pass —
+Pixi retains the display objects, so "draw" here only means "refresh the animated properties".
 
 ---
 
@@ -4568,11 +4972,13 @@ expressed as a function of `t` and not of a deadline.
 | 3 | particles | whole surface, **unclipped** (no arena mask here, unlike gameplay) | `game.particles.draw(surface)` (605) |
 | 4 | body | subclass; both screens open with a `draw_panel` | `_draw_body(surface)` (606) |
 | 5 | buttons | below the panel in both screens | `button.draw(surface, theme, game.fonts, game.time)` (607-608) |
-| — | cursor + post-processing | shell-level, above every scene | `main.py:427-431` |
+| — | cursor + post-processing | shell-level, above every scene | `main.py:427-433` |
 
 Because particles are layer 3 and the panel is layer 4 with `alpha=196` (game over) /
-`alpha=190` (victory), confetti and embers behind the panel show through it, dimmed. The
-captures confirm this: the background's line traces are clearly visible through both panels.
+`alpha=190` (victory), confetti and embers that fall behind the panel show through it, dimmed.
+The captures confirm the panel's translucency directly — in `10-gameover.png` the level-04
+background's line traces run visibly across the panel's interior — though what they prove is
+the *panel alpha*; the particles are simply on the same side of it.
 
 Pixi layout: one child `Container` per row of that table under `scene.root`, created in the
 constructor and never reordered. `game.particles` has `attachTo(parent, index?)`
@@ -4609,8 +5015,15 @@ it: `MOUSEMOTION` updates `hovered`; `MOUSEBUTTONDOWN` **button 1** inside the r
 and starts a `C.UI_CLICK_COOLDOWN` debounce. Dragging off cancels. Nothing on these screens is
 held, and there is no right-button or wheel binding.
 
+TS: `ButtonState.handlePointer(ev)` (`ui/Button.ts:375`, forwarded by `Button.handlePointer`
+at 561) takes one `UiPointerEvent` (`app/Game.ts:47-54`) whose `type` is `"move" | "down" |
+"up"` and whose `button` is `0` for touch — the same three cases, same "returns true exactly
+once per completed click" contract. Hit-testing is `hits()` (`ui/Button.ts:332`), half-open
+like `pygame.Rect.collidepoint`.
+
 Hover sound is emitted from `update`, not from the event (592-593): `audio.play("hover", 0.6)`
-when `button.just_entered`.
+when `button.just_entered` (`ButtonState.justEntered`, `ui/Button.ts:348`, computed in
+`ButtonState.update` at 405).
 
 #### 6.13.2 Keyboard (`_handle_key`, 559-581) — all edge-triggered on KEYDOWN
 
@@ -4630,9 +5043,17 @@ first `enabled` one whatever its `data` is (including a callable). There is no k
 `"next"` or `"story"` other than Enter/Space.
 
 Not bound anywhere on these screens: `K_p`, arrow keys, `K_TAB`, gamepad. `F11` / `Alt+Enter`
-are swallowed by the shell before any scene sees them (`main.py:357-364`) — note that
+are swallowed by the shell before any scene sees them (`main.py:356-363`) — note that
 `Alt+Enter` is consumed by the fullscreen toggle and therefore never reaches the primary-action
-branch.
+branch. The guard is `K_F11 or (key in (K_RETURN, K_KP_ENTER) and mod & KMOD_ALT)`, so
+**Alt+Space still fires the primary action**: only the two Enter keys are stolen.
+
+TS key names: `game.keyEvents` carries `KeyboardEvent.key`, lower-cased when it is a single
+character (`UiKeyEvent`, `app/Game.ts:59-63`; the transform is `input/Input.ts:199`), so the
+bindings above become `"Escape"`, `"l"`, `"r"`, and
+`"Enter" | " "` — there is no separate keypad-Enter value in the DOM (`NumpadEnter` reports
+`key === "Enter"`), which collapses `K_RETURN`/`K_KP_ENTER` into one case. Guard on
+`ev.type === "down" && !ev.repeat`, matching Python's KEYDOWN-only, no-autorepeat behaviour.
 
 #### 6.13.3 Transition table (`_act`, 511-532)
 
@@ -4696,12 +5117,22 @@ against `web/src/data/audio.json` `names[]` — **all present**, nothing to flag
 | victory late firework, `t < 6.0`, `random() < dt*1.4` | `_firework(uniform(220.0, 1060.0), uniform(140.0, 420.0), 0.7)` | 1067-1069 | — |
 
 Cue-name set for this file: `click`, `hover`, `die`, `bonus`, `win`, `levelup` — a subset of
-`audio.json`'s twelve. **No `fx.slowmo` anywhere on these screens** (unlike gameplay), and no
+`audio.json`'s twelve (`eat, bonus, powerup, hit, die, click, hover, start, levelup, win,
+boost, portal`). **No `fx.slowmo` anywhere on these screens** (unlike gameplay), and no
 `particles.trail` / `particles.ambient`.
+
+**The victory sting fires twice, by design of the hand-off.** `GameplayScene._finish` already
+plays `fx.flash(theme.accent, 0.7)` and `audio.play("win" if idx >= LEVEL_COUNT - 1 else
+"levelup")` (gameplay.py:1155-1156) in the same frame it switches, and then
+`VictoryScene._on_ready` plays `audio("win")` and `fx.flash(theme.accent, 0.45)` (925-928).
+On the final level that is literally the same cue twice, one frame apart; on every other level
+it is `levelup` immediately followed by `win`. This is shipped behaviour and the port must
+reproduce it — do not "deduplicate" it into one cue. (The game-over path has no such overlap:
+`_finish` plays nothing on a loss.)
 
 TS shapes: `ScreenFx.setTheme/shake/flash/slowmo/timeScale/beginTransition`
 (`gfx/post/ScreenFx.ts:268,281,332,370,382,397`), reached as `game.post.fx.*` (the pattern
-`GameplayScene.ts:315-332` already uses). `ParticleSystem.spawn(x, y, SpawnOptions)` /
+`GameplayScene.ts:397-414` already uses). `ParticleSystem.spawn(x, y, SpawnOptions)` /
 `ring(x, y, color, RingOptions)` / `burst(x, y, color, BurstOptions)` /
 `clear()` (`gfx/particles.ts:705,854,773,603`) — every named argument above exists on those
 option interfaces (`vx, vy, radius, color, life, drag, gravity, shrink, spin, kind`;
@@ -4713,46 +5144,84 @@ option interfaces (`vx, vy, radius, color, life, drag, gravity, shrink, spin, ki
 
 | Needs | Python | TS today | Status |
 |---|---|---|---|
-| level record | `get_level(i)`, `LEVEL_COUNT`, `level.name`, `level.goal_food`, `level.theme`, `level.star_targets()` | `getLevel(i)`, `LEVEL_COUNT`, `.name`, `.goalFood`, `.theme`, `.starTargets` (**property, not a method**) | ✅ `core/level.ts` |
-| difficulty | `D.get_difficulty(key)`, `D.apply_star_targets(diff, targets)`, `diff.key`, `diff.color`, `diff.hud_label` | `getDifficulty`, `applyStarTargets`, `.key`, `.color`, `.hudLabel` | ✅ `core/difficulty.ts:258,452,53-104` |
+| level record | `get_level(i)`, `LEVEL_COUNT`, `level.name`, `level.goal_food`, `level.theme`, `level.star_targets()` | `getLevel(i)`, `LEVEL_COUNT`, `.name`, `.goalFood`, `.theme`, `.starTargets` (**property, not a method**) | ✅ `core/level.ts:277,265,45,50,48,86` |
+| difficulty | `D.get_difficulty(key)`, `D.apply_star_targets(diff, targets)`, `diff.key`, `diff.color`, `diff.hud_label` | `getDifficulty`, `applyStarTargets`, `.key`, `.color`, `.hudLabel` | ✅ `core/difficulty.ts:258,452,56,62,64` |
 | save reads | `save.beat_seen(i)`, `save.best_for(i, diffKey)`, `save.total_stars(diffKey?)`, `save.max_stars()` | `beatSeen`, `bestFor`, `totalStars`, `maxStars` | ✅ `core/save.ts:920,676,703,717` |
 | save writes | `save.mark_beat_seen(i)`, `save.set_story_progress(i)`, `save.set_story_complete(True)`, `save.flush()` | `markBeatSeen`, `setStoryProgress`, `setStoryComplete`, `flush` | ✅ `core/save.ts:930,901,911,655` |
-| story | `S.get_beat(i)`, `S.get_chapter(i)`, `S.chapter_start(i)`, `S.EPILOGUE`, `S.StoryCard(title=, lines=, speaker=)` | `getBeat`, `getChapter`, `chapterStart`, `EPILOGUE`, `StoryCard` interface (`{title, lines, speaker}`) | ✅ `core/story.ts:268,279,307,223,60`. **Shim:** `chapter.roman` is a property in Python, a **method** `roman()` in TS (`story.ts:88`) |
-| colours | `P.THEMES[0]`, `P.UI_WHITE/UI_DIM/UI_GOOD/UI_WARN/UI_GOLD`, `P.lerp_color`, `P.shade`, `P.with_alpha`, `P.theme_for_level(i)` | `THEMES`, `UI_WHITE/UI_DIM/UI_GOOD/UI_WARN/UI_GOLD`, `lerpColor`, `shade`, `withAlpha`, `themeForLevel` | ✅ `core/palette.ts:255,287-297,36,46,51,261` |
+| story | `S.get_beat(i)`, `S.get_chapter(i)`, `S.chapter_start(i)`, `S.EPILOGUE`, `S.StoryCard(title=, lines=, speaker=)` | `getBeat`, `getChapter`, `chapterStart`, `EPILOGUE`, `StoryCard` interface (`{title, lines, speaker}`) | ✅ `core/story.ts:278,289,317,232,68`. **Two shims** — see below |
+| colours | `P.THEMES[0]`, `P.UI_WHITE/UI_DIM/UI_GOOD/UI_WARN/UI_GOLD`, `P.lerp_color`, `P.shade`, `P.with_alpha`, `P.theme_for_level(i)` | `THEMES`, `UI_WHITE/UI_DIM/UI_GOOD/UI_WARN/UI_GOLD`, `lerpColor`, `shade`, `withAlpha`, `themeForLevel` | ✅ `core/palette.ts:328, 360/362/364/366/370, 36, 46, 51, 334` |
 | maths | `clamp`, `ease_out_cubic`, `ease_out_back`, `pulse`, `TAU` | `clamp`, `easeOutCubic`, `easeOutBack`, `pulse`, `TAU` | ✅ `core/mathx.ts:12,53,65,74,10` |
-| constants | `C.WINDOW_W/H`, `C.MAX_DT`, `C.UI_BUTTON_H`, `C.MODE_STORY/MODE_FREE`, `C.SCENE_*` | `C.WINDOW_W/H`, `C.MAX_DT`, `C.UI_BUTTON_H`, `C.MODE_STORY/MODE_FREE`, `SCENES.*` | ✅ `core/config.ts:52-56,144,150-151`; `app/Scene.ts:65-76` |
-| shell | `game.level_index/mode/difficulty/last_result`, `switch_scene`, `game.time`, `game.particles`, `game.fx`, `game.mouse_pos` | `levelIndex/mode/difficulty/lastResult`, `switchScene`, `time`, `particles`, `post.fx`, `pointer` | ✅ `app/Game.ts:74-84,184,59,62` |
+| constants | `C.WINDOW_W/H`, `C.MAX_DT`, `C.UI_BUTTON_H`, `C.MODE_STORY/MODE_FREE`, `C.SCENE_*` | `C.WINDOW_W/H`, `C.MAX_DT`, `C.UI_BUTTON_H`, `C.MODE_STORY/MODE_FREE`, `SCENES.*` | ✅ `core/config.ts:54,55,58,146,154,155`; `app/Scene.ts:65-76` |
+| shell | `game.level_index/mode/difficulty/last_result`, `switch_scene`, `game.time`, `game.particles`, `game.fx`, `game.mouse_pos`, `game.fonts` | `levelIndex/mode/difficulty/lastResult`, `switchScene`, `time`, `particles`, `post.fx`, `pointer`, `fonts` | ✅ `app/Game.ts:137-140, 254, 130, 88, 89, 109, 98` |
 | background | `make_background(style, theme, rect)` → `.update(dt)` / `.draw()` | `makeBackground(style, theme, rect, renderer)` → `.update(dt, focus?)`, a display object | ✅ `gfx/bg/index.ts:81` (arity differs) |
-| particles | `spawn/ring/burst/clear/draw` | `spawn/ring/burst/clear/attachTo` | ✅ `gfx/particles.ts` |
-| fx | `fx.set_theme/flash/shake` | `setTheme/flash/shake` | ✅ `gfx/post/ScreenFx.ts` |
-| audio | `game.audio.play(name, vol?)` | `Audio.play` — injected per scene, **not on `Game`** (`main.ts:48,54`) | ✅ (constructor injection) |
+| particles | `spawn/ring/burst/clear/draw` | `spawn/ring/burst/clear/attachTo` | ✅ `gfx/particles.ts:705,854,773,603,615` |
+| fx | `fx.set_theme/flash/shake` | `setTheme/flash/shake` | ✅ `gfx/post/ScreenFx.ts:268,332,281` |
+| glow | `draw_glow_circle(surface, x, y, r, col, intensity)` | `glowSprite(r, col, intensity)` / `setGlow(sprite, r, col, intensity)` | ✅ `gfx/textures.ts:255,272` — **not** `ui/glow.ts`, see §6.2.6 |
+| audio | `game.audio.play(name, vol?)` | `Audio.play` — injected per scene, **not on `Game`** (`main.ts:52,58`) | ✅ (constructor injection) |
 | `C.GAME_MODES` | `config.py:210` | `GAME_MODES` lives in **`core/save.ts:104`**, not `config.ts` | ✅ but note the odd home |
 
-#### Not yet in the TS core — flag list
+Story shims, both of which bite `VictoryScene._story_cards` (§8) rather than the base, but
+which the base's `_chapter_line` and `_beat_seen`/`_mark_beat` sit next to:
 
-1. **`FontBook` / `game.fonts`.** `_ResultScene` needs `fonts.small` (17) and `fonts.h2` (30
-   bold); the two subclasses additionally need `tiny` (14), `body` (21), `huge` (96 display),
-   `title` (64 display) and `display_at(n)` for arbitrary sizes (`38*scale` on the NEW BEST
-   plate, `58` for the victory score). Owned by `docs/port/ui.md`; nothing exists in `web/src`
-   yet. `display_at(max(12, int(38*scale)))` (gameover.py:856) rasterises a *new size every
-   frame* during the 0.45 s swell — in Pixi that is one `Text` with `container.scale`, not a
-   font lookup.
-2. **`muteTheme` must rebuild `theme.hex`** — see §6.2.2. This is the one place the TS `Theme`
-   shape actively fights the Python `dataclasses.replace`.
-3. **`SaveData` is not on `Game`.** `main.ts:41-54` injects `save` and `sound` into scene
-   constructors. The result scenes must follow that, which also means `main.ts` has to
-   register them: `game.registerScene("gameover", (g) => new GameOverScene(g, save, sound))`
-   and the same for `"victory"`.
-4. **No comma-grouping helper exists.** Four call sites need `{:,}` semantics (§6.2.4); the
-   naive `toLocaleString()` is locale-dependent. Add `fmtThousands` next to `fmtTime`.
-5. **`draw_glow_circle` has no shared TS entry point.** `stampGlow` is a module-private
-   function in `gfx/SnakeRenderer.ts:204`. `_draw_star`, `_draw_badge` and both subclass
-   headings need it (nine call sites across the file). Either export it from a shared
-   `gfx/glow.ts` or accept a duplicated helper — the renderer phase should decide once.
-6. **`switch_scene` extra kwargs.** The story hand-off passes `cards`, `next_scene`,
-   `next_kwargs`, `theme` (984-1000). `SceneEnterArgs` is `{[key: string]: unknown}`
-   (`app/Scene.ts:14-16`), so this types fine, but `StoryScene` must accept exactly those four
-   names — the story-scene section owns that contract.
+1. `chapter.roman` is a **property** in Python and a **method** `roman()` in TS
+   (`core/story.ts:92`, implemented at 113).
+2. **A `Chapter` is not a `StoryCard` in TS.** Python appends `S.get_chapter(nxt)` straight
+   into the same `cards` list as its `StoryCard`s (gameover.py:960-961) because duck typing
+   lets `StoryScene` read `.title` off either. The TS `Chapter` (`core/story.ts:80-98`) has
+   `title` but carries `blurb: readonly string[]` (86) where `StoryCard` has `lines` (72), and
+   has no `speaker` at all. The card stack is therefore `Array<StoryCard | Chapter>` and `StoryScene`
+   must discriminate — or `_story_cards` must convert, `{title: ch.title, lines: ch.blurb,
+   speaker: ""}`. Pick one and pin it in the story-scene section; do not let both sides assume
+   the other did it.
+
+#### What the TS side still owes this section
+
+Three of the gaps this section originally listed have since been closed by the UI-kit and
+font work; they are kept here as *resolved* rows so nobody re-opens them.
+
+1. ~~**`FontBook` / `game.fonts` missing.**~~ **Resolved.** `FontBook` is `gfx/fonts.ts`,
+   constructed on the shell at `app/Game.ts:98`, and every role this file needs exists with the
+   Python's sizes: `huge` 96 display, `title` 64 display, `h1` 42 display, `h2` 30 bold,
+   `body` 21, `small` 17, `tiny` 14 (`gfx/fonts.ts:204-210`, matching `snake/gfx/fonts.py:63-69`),
+   plus `get(size, bold)` (234), `displayAt(size)` (239), `measureWidth` (301),
+   `faceMetrics` (276) and `fit(ladder, …)` (328). `_ResultScene` itself needs only `small` and
+   `h2`; §7 adds `tiny`, `body`, `huge` and a `displayAt`, §8 adds `title` and `displayAt(58)`.
+   The live guidance that survives: `display_at(max(12, int(38 * scale)))` (gameover.py:856)
+   rasterises a *new size every frame* during the 0.45 s NEW BEST swell — in Pixi that is one
+   `Label` at a fixed size driven by `Label.setScale` (`ui/text.ts:210`), never a per-frame
+   `displayAt` call, which would blow the glyph cache (limit 900, `ui/text.ts:38`).
+2. ~~**`muteTheme` must rebuild `theme.hex`.**~~ **Resolved.** `ui/muteTheme.ts:43-87` does it;
+   see §6.2.2. Import it, do not re-implement it under `scenes/result/`.
+3. **`SaveData` is not on `Game`** — still open. `main.ts:45-53` builds `save` and `sound` and
+   `main.ts:57-65` injects them per scene. The result scenes must follow that and be registered,
+   which nothing does yet: add `game.registerScene("gameover", (g) => new GameOverScene(g, save,
+   sound))` and the same for `"victory"`. Until then `switchScene("gameover")` throws
+   `unknown scene "gameover"` (`app/Game.ts:244`) — and `GameplayScene._finish`'s switch is the
+   only way out of a finished run, so this is a hard blocker for §7/§8, not a tidy-up.
+4. **The comma grouper is private** — still open, but the implementation exists.
+   `grouped()` (`ui/hud/Hud.ts:98-100`) is already the correct locale-pinned form; it is just
+   not exported, and `MenuScene.ts:793` had to inline it. Promote it (§6.2.4) before these
+   screens add four more call sites.
+5. ~~**`draw_glow_circle` has no shared TS entry point.**~~ **Resolved, but pick the right
+   one.** `glowSprite` / `setGlow` (`gfx/textures.ts:255,272`) over `radialTexture` (230) are
+   the exported `render.py` -flavour primitive; `stampGlow` (`gfx/SnakeRenderer.ts:204`) is a
+   private convenience over the same texture, and `ui/glow.ts::uiGlowSprite` is the **different**
+   `ui.py` curve. This file has nine `draw_glow_circle` call sites (star, badge, and the two
+   stacked pairs behind each heading, the victory score, the NEW BEST plate) and all nine want
+   `glowSprite`. See the intensity-clamp warning in §6.2.6.
+6. **`switch_scene` extra kwargs** — still open. The story hand-off passes `cards`,
+   `next_scene`, `next_kwargs`, `theme` (984-1000). `SceneEnterArgs` is `{[key: string]:
+   unknown}` (`app/Scene.ts:14-16`), so this types fine, but `StoryScene` must accept exactly
+   those four names — the story-scene section owns that contract.
+7. **`game.lastResult` has neither a writer nor a reader** — still open, and the result type
+   already exists under a different name and a different spelling. `GameplayWorld.finish`
+   builds a typed `RunResult` (`web/src/game/GameplayWorld.ts:132-162, 922-954`) into
+   `world.result`, which nothing reads; `game.lastResult` (`app/Game.ts:140`) is never
+   assigned. Wire `GameplayScene` to copy one into the other and to `switchScene`, and write
+   `ResultScene`'s parse against `RunResult`'s **camelCase** keys, not the Python's snake_case
+   ones. Full mapping and the failure mode in §6.9.4 — this is the highest-risk item on the
+   list, because getting it wrong produces a plausible-looking zeroed screen rather than an
+   error.
 
 ---
 
@@ -4776,7 +5245,10 @@ Read as images: `E:/SnakeGame/captures/10-gameover.png`, `E:/SnakeGame/captures/
 | `NORMAL PAR 140   (+165)` green, centred, top ≈ 488 | `_draw_par_line(640, 488)`, `UI_GOOD` because delta ≥ 0 (831) | ✔ |
 | `LEVEL BEST  305` dim, centred, top ≈ 522 | `rule_y + 46 = 522`, the `not new_best` branch (842-844) | ✔ |
 | three buttons, tops ≈ 604, lefts ≈ 212 / 506 / 800, RETRY highlighted | free-play row `_row(..., 604, width=268, gap=26)` (730-733) | ✔ |
-| warm sparse motes over a dark, desaturated backdrop with faint line traces | embers (746-766) over `make_background("lava"-family style, muted theme, (0,0,1280,720))` + veil at alpha 168 | ✔ |
+| warm sparse motes over a dark, desaturated backdrop with faint line traces | embers (746-766) over `make_background("lava", muted theme, (0,0,1280,720))` — level 04 is *Solar Flare*, theme index 3, `bgStyle: "lava"` (`web/src/data/themes.json`, `levels.json`) — plus the veil at alpha 168 | ✔ |
+| `9 / 14` — the goal half is 14 | `goal_food` for level 04 is `14` (`levels.json`), and the goal does **not** count up (§6.9.1 row 2) | ✔ |
+| par delta arithmetic | `score 305 − par 140 = +165`, matching `_fmt_delta` and the `UI_GOOD` branch (`delta >= 0`) | ✔ |
+| RETRY drawn wider than the other two, and lifted | `Button.draw`'s hover transform `scale = 1 + 0.035*hov − 0.055*press`, `lift = −3*hov + 2*press` (ui.py:507-508) — the cursor is over it, so it renders ≈277 px wide from x ≈ 208. The **layout** rect is still `(212, 604, 268, 58)`; do not measure the row off this button | ✔ |
 
 `11-victory.png`:
 
@@ -4796,10 +5268,12 @@ Read as images: `E:/SnakeGame/captures/10-gameover.png`, `E:/SnakeGame/captures/
 
 Unaccounted for on screen (both captures), all shell-level and not this section's business:
 
-* `60.0 fps` top-right — the debug FPS readout drawn by the shell (`fonts.mono_small`,
-  `main.py` draw tail), not by any scene.
-* The cursor glyph over `RETRY` (10) and `REPLAY` (11) — `ui.draw_cursor(surface, game)`, drawn
-  by the shell above every scene (`main.py:427-428`); owned by `docs/port/ui.md`.
+* `60.0 fps` top-right — the debug FPS readout drawn by the shell behind `C.SHOW_FPS`
+  (`fonts.mono_small` = 13 px, `snake/gfx/fonts.py:71`; `main.py:435` onward), not by any scene.
+* The cursor glyph over `RETRY` (10) and `REPLAY` (11) — `Game._draw_cursor` → `ui.draw_cursor`
+  (`main.py:428`, `470-474`), drawn by the shell above every scene; owned by `docs/port/ui.md`,
+  and in the port it is `game.cursor` inside the post chain (`app/Game.ts:107, 191-192`), which
+  `switchScene` re-adds after the new scene's root so it stays on top (`Game.ts:264`).
 * Vignette/grain/bloom and a faint CRT curvature — the shell's post-processing chain
   (`PostChain`), applied after the scene draws.
 * The soft warm radial behind each heading is the two stacked `draw_glow_circle` calls in each
@@ -4822,11 +5296,14 @@ Nothing on either screen is unexplained by the source.
    If the ported font measures differently from the pygame face, the chip width and its glow
    both shift. ui.md owns the font choice; this section only records the formula.
 4. **`switch_scene` transition.** `Game.switchScene` already calls
-   `this.post.fx.beginTransition()` (`Game.ts:196`), so the wipe integration.md §2.4 lists as a
-   gap is closed. Confirm the result screens want the wipe tinted by the *level* theme
-   (`fx.set_theme(self.theme)` at line 415 runs **before** the switch that brought us here has
-   finished transitioning, so the incoming wipe is tinted by the muted game-over accent —
-   verify against the Python by eye).
+   `this.post.fx.beginTransition()` (`app/Game.ts:268`), matching `main.py:314`, so the wipe
+   integration.md §2.4 still lists as a **TS gap is in fact closed** — fix that line in
+   integration.md rather than re-implementing it here. What remains open is the tint: the
+   incoming wipe is started by the *outgoing* scene's `switch_scene`, but
+   `_ResultScene.on_enter` calls `fx.set_theme(self.theme)` at line 415 — i.e. `on_enter` runs
+   at `main.py:313`, one line *before* `begin_transition()` at 314 — so the wipe into the game
+   over screen is already tinted by the **muted** accent, not the level's. Confirm that is
+   intended by eye before the port "corrects" it.
 5. **Enter and `Alt+Enter`.** The shell consumes `Alt+Enter` for fullscreen, so the primary
    action cannot be fired with Alt held. Harmless in Python; in the browser the fullscreen
    toggle is a different gesture entirely, so decide whether `Alt+Enter` should reach the
@@ -4843,17 +5320,35 @@ cache (`_ensure_background`), the veil (`_draw_veil`), the shared drawing helper
 records **only what the two subclasses override or add**, plus every call site's exact
 arguments.
 
-Suggested TS homes:
+Suggested TS homes - §6's *Suggested TS home* table already assigns these; the table below
+repeats them only so the two subclasses have somewhere to live:
 
 | Python | TS |
 |---|---|
-| `_ResultScene` | `web/src/scenes/ResultScene.ts` - `abstract class ResultScene extends Scene` (§6) |
-| `GameOverScene` | `web/src/scenes/GameOverScene.ts` - `class GameOverScene extends ResultScene` |
-| `VictoryScene` | `web/src/scenes/VictoryScene.ts` - `class VictoryScene extends ResultScene` |
-| `_mute` / `_mute_theme` (gameover.py:103-132) | `web/src/scenes/resultTheme.ts` - `mute(rgb, grey, dark)`, `muteTheme(theme)` (needs palette gap **P1**, §7.11) |
-| `_star_points` / `_draw_star` (gameover.py:153-182) | `web/src/gfx/ui/ratingStar.ts` - `starPoints(cx, cy, r, rot)`, `class RatingStar` (three persistent `Graphics`, redrawn only when scale/rot/glow change) |
+| `_ResultScene` | `web/src/scenes/result/ResultScene.ts` - `abstract class ResultScene extends Scene` (§6) |
+| `GameOverScene` | `web/src/scenes/result/GameOverScene.ts` - `class GameOverScene extends ResultScene` |
+| `VictoryScene` | `web/src/scenes/result/VictoryScene.ts` - `class VictoryScene extends ResultScene` |
+| `_mute` / `_mute_theme` (gameover.py:103-132) | **already ported**: `mute(color, grey?, dark?)` / `muteTheme(theme)` in `web/src/ui/muteTheme.ts:27,43` - do not write a second copy (§7.11) |
+| `_star_points` / `_draw_star` (gameover.py:153-182) | `web/src/scenes/result/decor.ts` - `starPoints`, `StarSprite` (§6.2.5, §6.2.8 own the shape) |
 
 `_fmt_time`, `_fmt_delta`, `_draw_badge` and `_draw_stat_row` are shared by both screens - §6.
+
+Both scenes take the shipped constructor shape and must be registered in `web/src/main.ts`
+next to the others (`game.registerScene("game", (g) => new GameplayScene(g, save, sound))`):
+`SaveData` and `Audio` are **injected**, they are not fields on `Game` (§6.15 flag 3).
+
+**Kit exports the call sites in this section resolve to.** The UI kit is ported; nothing below
+needs reimplementing. `docs/port/ui.md` owns the internals - this table exists so §7/§8 can say
+"`draw_panel(...)`" and the port knows exactly what to call.
+
+| Python call site | Shipped TS export |
+|---|---|
+| `draw_panel(surface, rect, theme, alpha=, glow=)` | `Panel` (`web/src/ui/panel.ts:251`): `setRect(x, y, w, h)` (:303), `setStyle(accent, alpha255, border, glow)` (:329) |
+| `draw_text(surface, text, font, color, (x, y), align=)` | `Label` (`web/src/ui/text.ts:116`): `new Label(fonts, style)`, `set` (:149), `place(x, yTop, align)` (:173), `setColor` (:192), `setAlpha` (:197), `setShadow` (:201), `setScale` (:210), `textWidth`/`textHeight` (:129,131). `place`'s y is the **top** edge and `align` is `"left" \| "center" \| "right"` - the same contract as `draw_text` (ui.py:268-291) |
+| `draw_glow_circle(surface, x, y, r, color, intensity)` | `uiGlowSprite(radius, color, intensity)` (`web/src/ui/glow.ts:104`) / `setUiGlow(sprite, radius, color, intensity)` (:116) - additive, anchored 0.5, texture cached per radius, hidden below an intensity epsilon. **This closes §6.15's flag 5**: no `stampGlow` export is needed |
+| `Button((x, y, w, h), label, style=, data=)`, `.handle_event` / `.update` / `.draw(surface, theme, fonts, time)` | `Button` (`web/src/ui/Button.ts:425`): `new Button(fonts, {x, y, w, h}, label, { style, data, font })` (the shape `MenuScene.ts:185-200` uses), `handlePointer(ev)` (:561), `update(dt, pointer)` (:565), `draw(theme, t)` (:573 - **no surface and no fonts**; the face is built at construction), `setEnabled` (:557), `data` (:433), `hoverT`/`pressT`/`justEntered` on `ButtonState` (:343-350). `hits(rect, px, py)` (:332) for hit-tests outside a `Button` |
+| `fonts.huge / title / h2 / body / small / tiny`, `fonts.display_at(n)` | `game.fonts` (`FontBook`, `web/src/gfx/fonts.ts`): `huge = displayAt(96)` (:204), `title = displayAt(64)` (:205), `h2 = get(30, true)` (:207), `body = get(21)` (:208), `small = get(17)` (:209), `tiny = get(14)` (:210), `displayAt(size)` (:239). Every face size quoted in §7.4 / §8.5 is the shipped one |
+| `"{:,}"` | no exported helper yet: `grouped()` is module-private (`web/src/ui/hud/Hud.ts:99-101`) and `MenuScene.ts:793` inlines `Math.trunc(v).toLocaleString("en-US")`. These two screens add four more call sites (§6.2.4) - hoist one shared `fmtThousands`, do not write a third copy |
 
 ### 7.0 Scene-local constants (gameover.py:84-97)
 
@@ -4864,18 +5359,19 @@ Suggested TS homes:
 | `STAR_FIRST` | `0.85` s | when star 0 pops | **no** |
 | `STAR_GAP` | `0.55` s | gap between successive star pops | **no** |
 | `STAR_POP` | `0.55` s | one star's pop duration | **no** |
-| `BUTTON_H` | `C.UI_BUTTON_H` = `58` | every button's height | **yes** - `config.json:UI_BUTTON_H`, `core/config.ts` `UI_BUTTON_H` |
-| `_MAX_BEAT` | `max(0, LEVEL_COUNT - 1)` = `11` | upper bound for `_mark_beat` | derived from `core/level.ts` `LEVEL_COUNT` |
-| `C.WINDOW_W` / `C.WINDOW_H` | `1280` / `720` | design box | **yes** - `core/config.ts` |
-| `C.MAX_DT` | `0.05` | dt clamp in `update` | **yes** |
+| `BUTTON_H` | `C.UI_BUTTON_H` = `58` (`config.py:176`) | every button's height | **yes** - `core/config.ts:146` |
+| `_MAX_BEAT` | `max(0, LEVEL_COUNT - 1)` = `11` | upper bound for `_mark_beat` | derived from `core/level.ts:265` `LEVEL_COUNT` = 12 |
+| `C.WINDOW_W` / `C.WINDOW_H` | `1280` / `720` (`config.py:28-29`) | design box | **yes** - `core/config.ts:54-55` |
+| `C.MAX_DT` | `1/20` = `0.05` (`config.py:60`) | dt clamp in `update` | **yes** - `core/config.ts:58` |
 
 `_MAX_BEAT = 11` matters: `mode_select.PROLOGUE_BEAT = 100` (`snake/scenes/mode_select.py:66`)
 is parked far above the level beats, and `_ResultScene._mark_beat` (gameover.py:385) refuses
 anything outside `0..11`, so the victory hand-off can never stamp the prologue as read.
 
-Declare `COUNT_TIME … STAR_POP` as module constants in `ResultScene.ts` / `VictoryScene.ts`,
-exactly as `docs/port/integration.md` §3 does for `READY_TIME`/`GO_TIME`. Do not add them to
-`config.json` - they are presentation, not simulation.
+Declare `COUNT_TIME … STAR_POP` as module constants in `web/src/scenes/result/ResultScene.ts`
+(§6.1 already puts them there), exactly as `docs/port/integration.md` §3 does for
+`READY_TIME`/`GO_TIME`. Do not add them to `config.json` - they are presentation, not
+simulation.
 
 ---
 
@@ -4887,19 +5383,24 @@ exactly as `docs/port/integration.md` §3 does for `READY_TIME`/`GO_TIME`. Do no
 |---|---|
 | Python class | `GameOverScene(_ResultScene)`, `snake/scenes/gameover.py:705-861` |
 | Registered key | `C.SCENE_GAMEOVER = "gameover"` (`snake/config.py:195`); registry entry `C.SCENE_GAMEOVER: ("gameover", "GameOverScene")` (`snake/main.py:38`) |
+| TS key | `SCENES.GAMEOVER = "gameover"` (`web/src/app/Scene.ts:71`) - already present, no new key needed |
 | `transparent` | `False` (inherited, `snake/core/contracts.py:48`) - opaque, paints its own background |
 | `blocks_update` | `True` (inherited, `contracts.py:49`) |
-| Entered from | `GameplayScene._finish(won=False)` -> `game.switch_scene(C.SCENE_GAMEOVER)` (`snake/scenes/gameplay.py:1161`). **Nothing else switches or pushes to it.** |
+| Entered from | `GameplayScene._finish(won: bool)` (`gameplay.py:1075`) -> `game.switch_scene(C.SCENE_GAMEOVER)` (`snake/scenes/gameplay.py:1161`), **with no kwargs**. A grep of `snake/` for `SCENE_GAMEOVER` returns only `config.py:195`, `main.py:38`, `gameplay.py:49,1161` and `settings.py:287` - **nothing else switches or pushes to it.** |
 | Can be overlaid by | `SettingsScene`, which accepts `C.SCENE_GAMEOVER` as a legal `back` target (`snake/scenes/settings.py:287`) - but no button on this screen opens settings, so that path is only reachable if a future caller wires it. |
 | Exits to | `game` (retry), `levels`, `menu` - always `switch_scene`, never `pop_scene` (§7.7) |
 
 ### 7.2 Owned state
 
-Only the fields this subclass adds. Every base field is §6's table.
+Only the fields this subclass adds. Every base field is §6.4's table.
+
+Audit evidence: grepping `GameOverScene` (705-861) for `self.<name> =` yields exactly
+`_ember_acc` (712, 736, 749, 753) and `_best_ping` (713, 737, 769). `_draw_body` and
+`_draw_new_best` assign nothing. The table below is therefore complete.
 
 | Attribute | Type | `__init__` value (line) | `on_enter` reset | Reset by |
 |---|---|---|---|---|
-| `veil_alpha` | `int` (class attr) | `168` (:708) - overrides base `120` (:232) | n/a (class constant) | - |
+| `veil_alpha` | `int` (**class** attr, not per-instance) | `168` (:708) - overrides base `120` (:232) | n/a (class constant) | - |
 | `_ember_acc` | `float` | `0.0` (:712) | `0.0` | `_on_ready` (:736) |
 | `_best_ping` | `bool` | `False` (:713) | `False` | `_on_ready` (:737) |
 
@@ -4913,8 +5414,12 @@ sits inside the same `try` as everything before it (:400-422). If `_build_theme(
 * the `die` sfx, the hazard flash and the 5 px shake are all skipped.
 
 In practice unreachable (`_build_buttons` here is pure arithmetic and `_build_theme` is
-`_mute_theme`, itself fully guarded at :117-132), but **the port must reset these fields in
-`onEnter` outside any try/catch**, not in an `onReady` hook that a sibling failure can skip.
+`_mute_theme`, whose whole body sits in one `try` at :115-132), but **the port must reset
+these fields in `onEnter` outside any try/catch**, not in an `onReady` hook that a sibling
+failure can skip - the same fix §6.4's latent bug 2 prescribes (`resetSceneState()` first,
+`onReady()` for the sting only). §6.4's latent bug 1 applies here too: clear
+`this.buttons = []` before the try, so the fallback MENU button can never be shadowed by the
+previous entry's row.
 
 ### 7.3 Construction vs entry
 
@@ -4943,7 +5448,7 @@ Per entry, in base `on_enter` order (:399-428), with the subclass hooks marked:
 
 Cached across entries: `_bg` / `_bg_style` / `_bg_theme_name` only.
 
-> **Port hazard (background cache key).** `_mute_theme` is a `dataclasses.replace` (:114-129),
+> **Port hazard (background cache key).** `_mute_theme` is a `dataclasses.replace` (:116-130),
 > so the muted theme keeps the *same* `name` and `bg_style` as the level theme (verified:
 > level 4's theme is `name="Solar Flare", bg_style="lava"` before and after muting). The cache
 > key `(bg_style, theme.name)` is therefore consistent **within** this scene, which always
@@ -4951,9 +5456,10 @@ Cached across entries: `_bg` / `_bg_style` / `_bg_theme_name` only.
 > hand the game-over screen the victory screen's full-strength background. Key the results
 > background per scene instance, or add the mute flag to the key.
 
-No RNG layout work: ember positions come from the unseeded global `random` module (:754-765).
-Cosmetic only - the port may use `Math.random()` or `web/src/gfx/rng.ts`; nothing asserts
-determinism (**Q3**).
+No RNG layout work: ember positions come from the unseeded global `random` module (:754-765),
+i.e. randomness here is **emission-time only**, never layout (§6.5). Plain `Math.random()` is
+correct; `web/src/gfx/rng.ts` (`makeSeededRng`, :51) is for the seeded background art and has
+no business in the emitter.
 
 ### 7.4 Layout (design pixels, 1280x720)
 
@@ -5008,6 +5514,11 @@ Row value strings (`counted(v) = int(v * count_frac() + 0.0001)`, i.e. a floored
 `best = int(game.save.best_for(self.level_index, self.diff.key))`, `0` on any exception
 (:836-841). It is **not** counted - it appears at full value immediately.
 
+There is **no star row on this screen**: `stars` is parsed like every other field
+(`_read_result`, :290) but a loss always carries `stars == 0`, and `GameOverScene._draw_body`
+never calls `_draw_star` (§6.10). Nothing between the badge at 272 and the first stat row at
+294 is drawn.
+
 Muted-palette reference values (computed from `snake/palette.py` `THEMES[3]`, "Solar Flare",
 `bg_style="lava"`) - use as a port fixture:
 
@@ -5030,9 +5541,13 @@ Muted-palette reference values (computed from `snake/palette.py` `THEMES[3]`, "S
 `_mute(color, grey, dark)` (:103-110):
 `lum = int(0.299*r + 0.587*g + 0.114*b)`; return `shade(lerp_color((r,g,b), (lum,lum,lum), grey), dark)`.
 Both `int()` and pygame-side channel clamping truncate; TS `clamp8` already truncates
-(`web/src/core/palette.ts:30-33`), so use `Math.trunc` for `lum` and the numbers above fall
-out bit-identical. On any exception `_mute` returns `(90, 96, 110)` (:108) and `_mute_theme`
-returns the theme unchanged (:131-132).
+(`web/src/core/palette.ts:30-33`). The shipped `mute()` (`web/src/ui/muteTheme.ts:27-34`)
+does use `Math.trunc` for `lum` (:32), so the table above is a ready-made **fixture**: assert
+`muteTheme(THEMES[3])` against those twelve triples and the port is proven bit-identical
+(every value was recomputed from `snake/palette.py` for this audit and matches). On any
+exception `_mute` returns `(90, 96, 110)` (:108, ported as `FALLBACK`, `muteTheme.ts:19`) and
+`_mute_theme` returns the theme unchanged (:131-132) - the TS version cannot throw and so
+drops that branch.
 
 Muted difficulty-badge colours (`_mute(diff.color, 0.30, 0.90)`), all four difficulties:
 
@@ -5054,7 +5569,8 @@ results screen (`docs/port/integration.md` §10).
 2. `self.t += dt` - **real dt**. Drives `count_frac`, the NEW BEST pop and the ping gate.
 3. `self._bg.update(dt)` if a background exists - **real dt** (:587-588).
 4. `mouse = game.mouse_pos`; for each button `button.update(dt, mouse)` - **real dt**; on
-   `button.just_entered` -> `audio.play("hover", 0.6)` (:589-593).
+   `button.just_entered` -> `audio.play("hover", 0.6)` (:589-593). TS: `game.pointer`
+   (`web/src/app/Game.ts:109`) is the `(x, y)` pair `Button.update(dt, pointer)` wants.
 5. `self._emit(dt)` -> **override** `GameOverScene._emit` (:746-774), **real dt**.
 
 Timers and curves:
@@ -5074,7 +5590,9 @@ Timers and curves:
 at `x = 0.9`), so the chime lands **0.105 s before** the badge starts swelling at `t = 1.35`.
 
 `ease_out_cubic`, `ease_out_back`, `pulse`, `clamp`, `TAU` are all in
-`web/src/core/mathx.ts` as `easeOutCubic`, `easeOutBack`, `pulse`, `clamp`, `TAU`.
+`web/src/core/mathx.ts` as `easeOutCubic` (:53), `easeOutBack` (:65), `pulse` (:74),
+`clamp` (:12), `TAU` (:10). `ease_out_back` is `c1 = 1.70158`, `c3 = 2.70158`
+(`contracts.py:207-211`), which is where the `1.1001` overshoot in the `scale` row comes from.
 
 Pixi note: `fonts.display_at(max(12, int(38*scale)))` is a *scaled* headline, not 14 distinct
 faces. Render `"NEW BEST"` once into a persistent `Text` at 38 px and set
@@ -5089,11 +5607,11 @@ each:
 | # | Layer | Fills | Notes |
 |---|---|---|---|
 | 1 | `self._bg.draw(surface)`, else `surface.fill(theme.bg_bottom)` | Python: the whole `1280x720` design box (`make_background(..., (0, 0, C.WINDOW_W, C.WINDOW_H))`, :477-478). Port: **overscan** is allowed and preferred (`viewport.overscan`) - it is pure ambience. Rebuild on `onResize`. | Built from the **muted** theme, which is why the lava backdrop reads brown rather than orange in `captures/10-gameover.png`. |
-| 2 | `_draw_veil(surface)` | `surface.get_size()` = the design box. **Decision (Q1):** if layer 1 fills overscan, layer 2 must too, or the un-veiled backdrop shows in the letterbox margin. | flat `with_alpha(shade(theme.bg_bottom, 0.6), 168)`; for the muted level-4 theme that is `(3, 1, 1, 168)`. |
-| 3 | `game.particles.draw(surface)` | design box | Embers therefore render **under** the panel and all text. Confirmed by the captures: nothing sits on top of the panel. TS: borrow the shell's layer - `particleLayer.addChild(game.particles.root)` in `onEnter`, remove in `onExit`, exactly as `web/src/scenes/GameplayScene.ts:141-144, 153-155` does. |
+| 2 | `_draw_veil(surface)` | `surface.get_size()` = the design box. **Decision (§6.17 Q1):** if layer 1 fills overscan, layer 2 must too, or the un-veiled backdrop shows in the letterbox margin. `viewport.overscan` (`web/src/app/Viewport.ts:51`) is the rect. | flat `with_alpha(shade(theme.bg_bottom, 0.6), 168)`; for the muted level-4 theme that is `(3, 1, 1, 168)`. |
+| 3 | `game.particles.draw(surface)` | design box, **unclipped** (no arena mask here) | Embers therefore render **under** the panel and all text. Confirmed by the captures: nothing sits on top of the panel. TS: borrow the shell's layer - `game.particles.root` (`gfx/particles.ts:537`) added to the scene root in the right slot, either by `attachTo(parent, index?)` (:615) or by plain insertion order as `MenuScene.ts:207` does; `GameplayScene.ts:166-169` / `:181-183` is the borrow-and-hand-back pattern (it uses `addChildAt` because gameplay's particles are clipped to the arena - these screens are not). |
 | 4 | `_draw_body(surface)` -> override (:777-844) | panel + text, table §7.4 rows 2-21 | |
-| 5 | `for button in self.buttons: button.draw(surface, self.theme, self.game.fonts, self.game.time)` | | unclipped - the button glow may bleed past the design box |
-| - | cursor, then `fx.present` post-chain | shell (`docs/port/integration.md` §2.2) | not the scene's business |
+| 5 | `for button in self.buttons: button.draw(surface, self.theme, self.game.fonts, self.game.time)` (:607-608) | | unclipped - the button glow may bleed past the design box. TS is `button.draw(theme, game.time)` |
+| - | cursor (`main.py:428`), then `fx.present` (`main.py:432`) | shell (`docs/port/integration.md` §2.2) | not the scene's business |
 
 ### 7.7 Input and transitions
 
@@ -5111,7 +5629,20 @@ No `handle_event` / `_handle_key` override - base only (:547-581). Everything is
 
 `fire(action)` only acts when `action in self._actions()`, and `_actions()` is built from the
 enabled buttons' `data` strings (:538-544) - **keyboard is exactly a mirror of what is on
-screen**, never a superset. Every key path plays `"click"` first.
+screen**, never a superset. Every key path plays `"click"` first. The Enter branch (:575-581)
+is the one exception to the mirror rule: it does not consult `_actions()`, it walks
+`self.buttons` and fires the first `enabled` one whatever its `data` is (§6.13.2).
+
+TS input shape - the shipped idiom, `MenuScene.ts:363-376`: one pass over `game.uiEvents`
+handing each event to every `button.handlePointer(ev)` and latching the first `data` that
+fires, then a pass over `game.keyEvents` skipping `ev.type !== "down"` and `ev.repeat`,
+mapping `"Escape"` -> menu, `"l"` -> levels, `"r"` -> retry, `"Enter"` / `" "` -> the primary.
+Drain `uiEvents` **before** `button.update(dt, pointer)`, exactly as
+`web/src/scenes/GameplayScene.ts:226-238` does - a move must be able to write `hovered` before
+`justEntered` is computed, which is what Python's pump-then-update order gives for free (and
+it is also what lets a phone tap press and release inside one frame). `keyEvents` carry
+`{ type: "down" | "up", key, repeat }` (`Game.ts:59-63`). `K_KP_ENTER` has no separate DOM key:
+the numpad Enter also reports `"Enter"`, so the three-key Python tuple collapses to two.
 
 Buttons (`_build_buttons`, :718-733), both rows at `y = 604`, `h = 58`:
 
@@ -5133,7 +5664,8 @@ Transition table:
 | MENU / ABANDON RUN, `Esc` | `"menu"` | `switch_scene` | `C.SCENE_MENU` = `"menu"` | none | none |
 
 `_go` (:494-509) retries the call without kwargs on `TypeError`, so a target whose `on_enter`
-takes no arguments still works. Nothing here calls `push_scene` or `pop_scene`.
+takes no arguments still works; in TS `onEnter(args?)` always accepts an object, so that retry
+is dead code and §6.13.3 says not to port it. Nothing here calls `push_scene` or `pop_scene`.
 
 Session state: `game.level_index` is written on **entry** (`on_enter`, :410) and again on
 `"retry"` (:519). `game.mode`, `game.difficulty` and `game.last_result` are **never written**
@@ -5156,16 +5688,17 @@ port must not assume the dict is consumed.
 | same | `particles.ring` | `x = 640.0` (`C.WINDOW_W*0.5`), `y = 250.0`, `color = UI_GOLD`, `radius = 120.0`, `count = 30`, `life = 0.8`, `speed = 190.0` | :771-772 |
 | any button hover enter | `audio.play` | `"hover"`, volume `0.6` | :593 |
 | any button click | `audio.play` | `"click"` | :551 |
-| any keyboard action | `audio.play` | `"click"` | :567, :578 |
+| any keyboard action | `audio.play` | `"click"` | :566 (`fire`), :579 (the Enter branch) |
 
 Cue-name cross-check against `web/src/data/audio.json` (`names`: `eat, bonus, powerup, hit,
 die, click, hover, start, levelup, win, boost, portal`): `die`, `bonus`, `hover`, `click` all
 present, all with recipes; `missingRecipes` is empty. **Nothing to flag.**
 
-TS shapes: `audio.play(name, volume = 1.0)` (`web/src/audio/Audio.ts:318`);
+TS shapes: `audio.play(name, volume = 1.0)` (`web/src/audio/Audio.ts:318`), on the **injected**
+`Audio`, not on `Game`;
 `particles.spawn(x, y, {vx, vy, radius, color, life, drag, gravity, shrink, kind, spin})`
 (`web/src/gfx/particles.ts:705`, `SpawnOptions` :400-415 - `"ember"` and `"dot"` are both in
-`KINDS`, :81-87); `particles.ring(x, y, color, {radius, count, life, speed})` (:854,
+`KINDS`, :81-91); `particles.ring(x, y, color, {radius, count, life, speed})` (:854,
 `RingOptions` :445-453); `fx` is `game.post.fx` (`ScreenFx`) with
 `flash(color, amount)` (`web/src/gfx/post/ScreenFx.ts:332`), `shake(amount, opts?)` (:281),
 `setTheme(theme)` (:268).
@@ -5176,13 +5709,13 @@ There are no `fx.slowmo` and no `particles.burst`/`trail`/`ambient` calls on thi
 
 | Source | Python read | TS equivalent | Status |
 |---|---|---|---|
-| `game.last_result` | `_read_result` (§6) | `game.lastResult` (`web/src/app/Game.ts:84`) | ✅ |
-| `levels.json` | `get_level(idx).theme`, `.name`, `.goal_food`, `.star_targets()` | `getLevel(i).theme` / `.name` / `.goalFood` / `.starTargets` (property, not a method) | ✅ `core/level.ts` |
-| `difficulty.json` | `D.get_difficulty(key)`, `diff.key`, `diff.color`, `diff.hud_label`, `D.apply_star_targets(diff, targets)` | `getDifficulty`, `key`, `color`, `hudLabel`, `applyStarTargets` | ✅ `core/difficulty.ts:258, 452` |
-| `story.json` | `S.get_chapter(idx).roman` (via `_chapter_line`) | `getChapter(i).roman()` - **a method in TS**, a `@property` in Python (`snake/core/story.py:127-130`) | ⚠ naming shim |
-| `SaveData` | `save.best_for(level_index, diff.key)` (:838-839) | `bestFor(levelIndex, difficulty)` (`core/save.ts:676`) | ✅ |
-| `config.json` | `C.WINDOW_W/H`, `C.UI_BUTTON_H`, `C.MAX_DT`, `C.UI_CLICK_COOLDOWN` | `WINDOW_W/H`, `UI_BUTTON_H`, `MAX_DT`, `UI_CLICK_COOLDOWN` | ✅ `core/config.ts` |
-| `palette` | `UI_WHITE`, `UI_GOLD`, `UI_GOOD`, `UI_WARN`, `UI_DIM`, `lerp_color`, `shade`, `with_alpha` | `UI_WHITE`, `UI_GOLD`, `UI_GOOD`, `UI_WARN`, `UI_DIM`, `lerpColor`, `shade`, `withAlpha` | ✅ `core/palette.ts` |
+| `game.last_result` | `_read_result` (§6) | `game.lastResult` (`web/src/app/Game.ts:140`; `levelIndex` :137, `mode` :138, `difficulty` :139, `time` :130, `particles` :88, `post` :89, `fonts` :98, `pointer` :109, `switchScene` :254) | ✅ |
+| `levels.json` | `get_level(idx).theme`, `.name`, `.goal_food`, `.star_targets()` | `getLevel(i)` (`core/level.ts:277`) `.theme` / `.name` / `.goalFood` / `.starTargets` (property :86, not a method) | ✅ `core/level.ts` |
+| `difficulty.json` | `D.get_difficulty(key)`, `diff.key`, `diff.color`, `diff.hud_label`, `D.apply_star_targets(diff, targets)` | `getDifficulty` (:258), `key`, `color`, `hudLabel` (:64), `applyStarTargets` (:452) | ✅ `core/difficulty.ts` |
+| `story.json` | `S.get_chapter(idx).roman` (via `_chapter_line`) | `getChapter(i)` (`core/story.ts:289`) `.roman()` - **a method in TS** (`Chapter` :92, `ChapterRecord` :113), a `@property` in Python (`snake/core/story.py:127-130`) | ⚠ naming shim |
+| `SaveData` | `save.best_for(level_index, diff.key)` (:838-839) | `bestFor(levelIndex, difficulty)` (`core/save.ts:676`) - on the **injected** `SaveData`, there is no `game.save` (§6.15 flag 3) | ✅ |
+| `config.json` | `C.WINDOW_W/H`, `C.UI_BUTTON_H`, `C.MAX_DT`, `C.UI_CLICK_COOLDOWN` | `WINDOW_W/H` (:54-55), `UI_BUTTON_H` (:146), `MAX_DT` (:58), `UI_CLICK_COOLDOWN` (:148) | ✅ `core/config.ts` |
+| `palette` | `UI_WHITE`, `UI_GOLD`, `UI_GOOD`, `UI_WARN`, `UI_DIM`, `lerp_color`, `shade`, `with_alpha` | `UI_WHITE` (:360), `UI_DIM` (:362), `UI_GOOD` (:364), `UI_WARN` (:366), `UI_GOLD` (:370), `lerpColor` (:36), `shade` (:46), `withAlpha` (:51) | ✅ `core/palette.ts` |
 
 **This screen writes nothing to `SaveData`** - not `record`, not `unlockThrough`, not
 `flush`. Everything was already persisted by `GameplayScene._finish`
@@ -5200,7 +5733,7 @@ Measured against §7.4 (free play, level 4 "Solar Flare", NORMAL, score 305, `ne
 | `GAME OVER`, pale pink-white, red blob visible in the `E`/`O` gap | ✅ `lerp_color(UI_WHITE, hazard, 0.35)` over the 120 px tight glow at `(640, 152)` |
 | `LEVEL 04` tiny dim at `y ≈ 212` | ✅ `_chapter_line()` free-play form, top edge 206 |
 | `SOLAR FLARE` body at `y ≈ 231` | ✅ top edge 224 |
-| NORMAL chip, dimmed cyan, `≈110 x 30`, centred `(640, 273)` | ✅ centre `(640, 272)`; `w = 17px("NORMAL") + 40 ≈ 110`, `h = th + 12 ≈ 30`; rim `(108, 174, 207)` |
+| NORMAL chip, dimmed cyan, measured `≈108 x 30`, centred `(640, 273)` | ✅ centre `(640, 272)`; `w = tw + 40` with `tw ≈ 68` for `"NORMAL"` in `fonts.small`, `h = th + 12 ≈ 30`; rim `(108, 174, 207)` (the muted NORMAL colour computed in §7.4) |
 | four rows, labels left at `x = 372`, values right-flush at `x = 908` | ✅ rows at `y = 294/338/382/426` |
 | `305` gold-cream, `9 / 14`, `x4`, `1:01` white | ✅ row-1 `value_color (246,228,178)`; rows 2-4 `theme.text` muted `(200,209,227)` |
 | hairline at `y ≈ 477`, spanning `372..908` | ✅ `rule_y = 476` |
@@ -5212,7 +5745,7 @@ Measured against §7.4 (free play, level 4 "Solar Flare", NORMAL, score 305, `ne
 Unaccounted for from **this** source, all attributable elsewhere:
 
 * `60.0 fps` top-right - shell debug readout in `snake/main.py` (`fonts.mono_small`), not a scene layer.
-* the small orange sunburst over RETRY - the shell's custom cursor (`draw_cursor`, §2.2).
+* the small orange sunburst over RETRY - the shell's custom cursor (`main.py:428`; `ui.draw_cursor`, `docs/port/ui.md`).
 * the brown web of thin polylines and the large soft bokeh discs - the `lava` background style,
   built from the **muted** theme; `docs/port/background-*.md`.
 * corner darkening / faint scanlines - the `fx.present` post-chain (vignette, grain, CRT).
@@ -5224,13 +5757,19 @@ Nothing on screen is unexplained.
 
 ### 7.11 Gaps for the TS port
 
-* **P1 - no way to build a derived `Theme`.** `_mute_theme` is `dataclasses.replace`. The TS
-  `Theme` (`core/palette.ts:146-172`) is an interface carrying a **precomputed `hex` mirror**,
-  and `buildTheme` is module-private and takes raw snake_case keys. Muting a theme in TS
-  therefore needs a new export, e.g.
-  `deriveTheme(base: Theme, patch: Partial<Omit<Theme, "hex">>): Theme` that recomputes every
-  `hex` field. Without it a port either recomputes `hex` by hand at each call site (and will
-  miss one) or renders the muted screen with full-strength packed colours.
+* **P1 - CLOSED.** The gap this section used to record ("no way to build a derived `Theme`",
+  §6.15 flag 2) is shipped: `web/src/ui/muteTheme.ts` exports `mute(color, grey?, dark?)` (:27)
+  and `muteTheme(theme)` (:43), and it **does** rebuild the `hex` mirror with `toHex` for all
+  twelve fields (:72-85) - which was the whole hazard, since every Pixi tint reads
+  `theme.hex.*`. `GameOverScene._build_theme` is therefore one line:
+  `return muteTheme(getLevel(this.levelIndex).theme)`. Do not add a `deriveTheme` to
+  `palette.ts`, and do not re-derive the mute inline.
+* **Flag 5 of §6.15 is also closed** by `uiGlowSprite` / `setUiGlow` (`web/src/ui/glow.ts:104,116`);
+  all four `draw_glow_circle` call sites on this screen (:790, :792, :855 and the badge's own
+  at :204 inside `_draw_badge`) map onto it directly.
+* Still open for this screen: nothing in the core. What remains is scene work - registering
+  `"gameover"` in `main.ts` with the injected `save`/`sound`, the shared `fmtThousands`
+  (§6.2.4, and see the kit table above), and `ResultScene` itself.
 
 ---
 
@@ -5242,23 +5781,32 @@ Nothing on screen is unexplained.
 |---|---|
 | Python class | `VictoryScene(_ResultScene)`, `snake/scenes/gameover.py:867-1184` |
 | Registered key | `C.SCENE_VICTORY = "victory"` (`snake/config.py:196`); registry `C.SCENE_VICTORY: ("gameover", "VictoryScene")` (`snake/main.py:39`) - **same module, different class** |
-| `transparent` | `False` (inherited) |
-| `blocks_update` | `True` (inherited) |
-| Entered from | `GameplayScene._finish(won=True)` -> `switch_scene(C.SCENE_VICTORY)` (`gameplay.py:1161`). Nothing else. |
-| Exits to | `game`, `levels`, `menu`, **`story`** (the campaign hand-off it owns) |
+| TS key | `SCENES.VICTORY = "victory"` (`web/src/app/Scene.ts:72`) - already present |
+| `transparent` | `False` (inherited, `contracts.py:48`) |
+| `blocks_update` | `True` (inherited, `contracts.py:49`) |
+| Entered from | `GameplayScene._finish(won: bool)` -> `switch_scene(C.SCENE_VICTORY)` (`gameplay.py:1161`), **with no kwargs**. Nothing else - the only other mention of `SCENE_VICTORY` in `snake/` is `settings.py:287`. |
+| Can be overlaid by | `SettingsScene`, which accepts `C.SCENE_VICTORY` as a legal `back` target (`settings.py:287`); no button here opens settings, so the path is latent, exactly as on the game-over screen (§7.1). Note that returning through it re-runs `on_enter`, replaying the entry sting and the whole ceremony (§6.3). |
+| Exits to | `game`, `levels`, `menu`, **`story`** (the campaign hand-off it owns) - always `switch_scene`, never `pop_scene` (§8.9) |
 
 ### 8.2 Owned state
 
+Audit evidence: grepping `VictoryScene` (867-1184) for `self.<name> =` yields exactly
+`_stars_shown` (880, 918, 1032), `_confetti` (881, 919, 1048), `_confetti_acc` (882, 920, 1049,
+1052), `_star_x` (883, 923) and `_star_y` (884, 921, 1105). `_story_cards`, `_story_continue`,
+`_colors`, `_firework`, `_emit` and the three draw helpers assign no instance state. The table
+is complete; every base field is §6.4's.
+
 | Attribute | Type | `__init__` value (line) | `on_enter` reset | Reset by |
 |---|---|---|---|---|
-| `veil_alpha` | `int` (class attr) | `112` (:876) - overrides base `120` | n/a | - |
+| `veil_alpha` | `int` (**class** attr, not per-instance) | `112` (:876) - overrides base `120` (:232) | n/a | - |
 | `_stars_shown` | `int` | `0` (:880) | `0` | `_on_ready` (:918) |
 | `_confetti` | `float` (seconds of shower left) | `0.0` (:881) | `2.6` | `_on_ready` (:919) |
 | `_confetti_acc` | `float` | `0.0` (:882) | `0.0` | `_on_ready` (:920) |
 | `_star_x` | `List[float]` | `[]` (:883) | `[522.0, 640.0, 758.0]` = `[cx-118, cx, cx+118]` | `_on_ready` (:922-923) |
 | `_star_y` | `float` | `292.0` (:884) | `292.0` | `_on_ready` (:921) **and** re-assigned every frame in `_draw_body` (:1105) |
 
-All six are reset. Same conditional hole as §7.2: `_on_ready` is the last statement of the
+All five instance fields are reset (`veil_alpha` is a class constant, not per-entry state).
+Same conditional hole as §7.2: `_on_ready` is the last statement of the
 base `on_enter` try-block, so a failure in `_build_theme`/`_build_buttons`/`particles.clear()`
 strands the previous run's `_stars_shown`. The visible symptom is precise and silent: with a
 stale `_stars_shown = 3`, `while self._stars_shown < want` (:1030) never runs, so **no star
@@ -5269,7 +5817,9 @@ path keys off `self.t`, not `_stars_shown`, :1173-1177). Reset in `onEnter` unco
 it out of the port's draw path (nothing reads a different value).
 
 `_draw_stars` and the star-pop emitter both guard `idx < len(self._star_x)` and fall back to
-`C.WINDOW_W * 0.5` (:1033, :1171) - defensive only; `_star_x` always has three entries.
+`C.WINDOW_W * 0.5` (:1033, :1171) - defensive only; `_star_x` always has three entries **once
+`_on_ready` has run**. On the skipped-`_on_ready` path above, a first-ever entry leaves
+`_star_x == []` and all three stars stack on top of each other at x = 640 (§6.4, latent bug 2).
 
 `VictoryScene` deliberately has **no `on_enter` override** (comment, :913-915): `final` and
 `mode` are resolved by `_read_result`/`_derive` before the base calls `_build_buttons`, so the
@@ -5277,14 +5827,15 @@ button row is already correct.
 
 ### 8.3 Construction vs entry
 
-Built once: the six fields above. Per entry, identical to §7.3 except:
+Built once, in `__init__` (:878-884): the five instance fields above (plus every base field).
+Per entry, identical to §7.3 except:
 
 * step 5 `_build_theme()` is **not overridden** -> the base returns `get_level(idx).theme`
   **at full strength** (:436-437). This is the whole visual difference in mood.
 * step 6 `fx.set_theme(theme)` therefore arms the next transition wipe with the *bright*
   accent.
 * step 8 `_build_buttons()` -> §8.7 (four different rows).
-* step 10 `_on_ready()` (:917-929) resets the six fields, then plays `"win"`, flashes and
+* step 10 `_on_ready()` (:917-929) resets the five fields (:918-923), then plays `"win"`, flashes and
   **emits the entry firework**. `game.particles.clear()` runs at step 9, immediately before -
   reversing those two lines deletes the entry burst. This is the ordering bug the port is most
   likely to introduce.
@@ -5393,13 +5944,18 @@ which never bites (`0.25 * 40 = 10`).
 
 `_star_points(cx, cy, radius, rot)` (:153-162): ten vertices, `inner = radius * 0.44`,
 `r = radius` on even `i`, `inner` on odd; `ang = -pi/2 + rot + i * (TAU/10)`; each point is
-`(int(cx + cos(ang)*r), int(cy + sin(ang)*r))` - **truncated to int**, so a Pixi port drawing
-in floats will differ by up to 1 px per vertex. Accept it (the settled float-coordinate call
-in `docs/port/gfx-port-decisions`) or `Math.trunc` to match exactly; do not blend the two.
+`(int(cx + cos(ang)*r), int(cy + sin(ang)*r))` - **truncated to int** in Python. The port
+**drops the truncation and draws in floats**: that is settled (§6.2.5, gfx-port-decisions), and
+for a good reason - a truncated vertex moves a tip by up to 1 design px, which is ~2.5 device
+px on a 1080p phone and visibly wobbles during the pop. Do not re-open it.
 
-Pixi shape: three persistent `Graphics` objects, redrawn only when `scale`, `spin` or the
-filled/outline state changes; the breathing `glow` term is a separate additive sprite whose
-alpha animates per frame without a redraw.
+Pixi shape (§6.2.8 is authoritative): the polygon geometry is built **once at `radius = 40`**
+per star and the pop is a transform - `container.scale = scale`, `container.rotation = spin` -
+never a per-frame rebuild. The breathing `glow` term is a separate additive
+`uiGlowSprite(radius * 1.9, UI_GOLD, glow)` (`web/src/ui/glow.ts:104`) whose alpha animates
+per frame without touching the `Graphics`. The rim width `max(1, int(radius*0.10))` of the
+animated radius becomes a continuous scaled stroke where Python's is a staircase - the accepted
+divergence recorded in §6.2.8.
 
 ### 8.7 Buttons
 
@@ -5488,7 +6044,7 @@ card that cannot be built simply drops out.
    `0 <= idx <= 11` (:949, :379-389). **Unconditional** - it happens on both the final and
    non-final paths.
 3. If `self.final`: append `S.EPILOGUE` (a module-level `StoryCard`,
-   `snake/core/story.py:458-466`) and **return** - no chapter plate, no next intro (:951-956).
+   `snake/core/story.py:458-467`) and **return** - no chapter plate, no next intro (:951-956).
 4. `nxt = self.next_index`. If `S.chapter_start(nxt)` (true when `nxt` is a chapter's
    `first_index`, `story.py:539-547`): append `S.get_chapter(nxt)` - **a `Chapter` object, not
    a `StoryCard`** (:959-962).
@@ -5533,9 +6089,12 @@ written on entry, during the animation, or on REPLAY / NEXT LEVEL / LEVEL SELECT
 
 Three things a port gets wrong silently here:
 
-1. **Cards before saves.** `_story_cards()` is called first (:976) and its step 5 reads
-   `_beat_seen(nxt)`; its steps 2/6 then *write* `mark_beat_seen`. Move the writes earlier and
-   the next level's intro is suppressed on the very run that should show it.
+1. **Cards before saves, and the read before its own write.** `_story_cards()` is called first
+   (:976); inside it, step 5 *reads* `_beat_seen(nxt)` (:964) and step 6 then *writes*
+   `mark_beat_seen(nxt)` (:971). Hoist that write above the read - or run the whole card build
+   after the save block - and the next level's intro is suppressed on the very run that should
+   show it. (Step 2's write is `mark_beat_seen(level_index)`, a different index, so it is
+   order-independent.)
 2. `set_story_progress` is called *again* here even though `_finish` already did it. It is
    idempotent and forward-only (`snake/core/save.py:771`), so keep both calls rather than
    "optimising" one away - `_finish` writes it for the *run*, this writes it for the
@@ -5564,8 +6123,13 @@ Resolved for both powers actually used:
 
 | `power` | ring radius | ring speed | burst count | burst speed |
 |---|---|---|---|---|
-| `1.15` (entry) | `126.5` | `230.0` | `int(23.0) = 23` | `(90.0, 368.0)` |
-| `0.7` (late) | `77.0` | `140.0` | `int(14.0) = 14` | `(90.0, 224.0)` |
+| `1.15` (entry) | `126.49999999999999` | `229.99999999999997` | `int(20*1.15) = 23` | `(90.0, 368.0)` |
+| `0.7` (late) | `77.0` | `140.0` | `int(20*0.7) = 14` | `(90.0, 224.0)` |
+
+The burst counts are the row to be careful with, because they truncate a float product.
+Checked in both runtimes: `20*1.15` is exactly `23` and `20*0.7` is exactly `14` as IEEE-754
+doubles, in CPython and in V8 alike, so `Math.trunc` reproduces 23 / 14 - no rounding needed.
+The two ragged ring values only feed a radius and a speed, where the dust is invisible.
 
 Full call table:
 
@@ -5581,7 +6145,7 @@ Full call table:
 | confetti, `90.0` /s for the first `2.6` s | `particles.spawn` | `x = uniform(0.0, 1280.0)`, `y = uniform(-60.0, -6.0)`, `vx = uniform(-70.0, 70.0)`, `vy = uniform(30.0, 120.0)`, `radius = uniform(2.0, 4.6)`, `color = random.choice(_colors())`, `life = uniform(1.6, 3.2)`, `drag = 0.5`, `gravity = 95.0`, `shrink = False`, `kind = "shard"` if `random() < 0.45` else `"dot"`, `spin = uniform(-6.0, 6.0)` | :1053-1063 |
 | after the shower, while `t < 6.0`, `P(dt*1.4)` per frame | `_firework` | `(uniform(220.0, 1060.0), uniform(140.0, 420.0), 0.7)` | :1067-1069 |
 | button hover enter | `audio.play` | `"hover"`, `0.6` | :593 |
-| button click / key action | `audio.play` | `"click"` | :551, :567, :578 |
+| button click / key action | `audio.play` | `"click"` | :551 (mouse), :566 (`fire`), :579 (Enter branch) |
 
 `col` for star `idx` (:1034): `UI_GOLD` when `idx < 2`, else
 `lerp_color(UI_GOLD, UI_WHITE, 0.4)` - this affects the **particles only**; the star polygon
@@ -5593,15 +6157,20 @@ flag.** There is no `fx.shake` on entry (unlike game over) and no `fx.slowmo` an
 
 TS shapes: `particles.burst(x, y, color, {count, speed, life, radius})`
 (`web/src/gfx/particles.ts:773`, `BurstOptions` :417-431 - `speed`/`life`/`radius` take
-`Ranged` tuples exactly as Python does); `"shard"` and `"dot"` are both in `KINDS` (:81-87).
+`Ranged` tuples exactly as Python does); `"shard"` and `"dot"` are both in `KINDS` (:81-91).
+Python's `burst` default `radius=(2.0, 5.0)` (`snake/gfx/particles.py:436`) is the same default
+`BurstOptions.radius` carries, so the star-pop bursts can omit it in TS too.
 
 ### 8.11 `draw()`
 
 Base `draw` (:598-610), same five layers as §7.6 with `_draw_body` -> `VictoryScene._draw_body`
 (:1074-1138) and the veil at `112`. Two consequences worth stating:
 
-* the background is the **full-strength** level theme (`captures/11-victory.png` shows the
-  bright lava field, `13-victory-final.png` the prism spokes);
+* the background style is the level's own `theme.bg_style` at **full strength** - `lava` for
+  level 4, `prism` for level 12 - built by `_ensure_background` over `(0, 0, 1280, 720)` in
+  Python and over `viewport.overscan` in the port, exactly as §7.6 lays out
+  (`captures/11-victory.png` shows the bright lava field, `13-victory-final.png` the prism
+  spokes);
 * confetti and fireworks are layer 3, so they draw **behind** the panel (`alpha = 190`, so
   they show through faintly) and behind every text row. Both captures confirm: confetti is
   crisp outside the panel and only ghosted inside it.
@@ -5612,16 +6181,16 @@ Everything in §7.9, plus:
 
 | Source | Python read | TS equivalent | Status |
 |---|---|---|---|
-| `story.json` | `S.get_beat(i).title/.intro/.outro/.speaker` | `getBeat(i).title/.intro/.outro/.speaker` (`core/story.ts:268`, `StoryBeat` :33-51) | ✅ |
-| `story.json` | `S.StoryCard(title=, lines=, speaker=)` | `StoryCard` is an **`interface`**, not a class (`core/story.ts:60-67`) - build a plain object literal `{ title, lines, speaker }` | ⚠ shape shim |
-| `story.json` | `S.chapter_start(nxt)` | `chapterStart(nxt)` (:307) | ✅ |
-| `story.json` | `S.get_chapter(nxt)` appended straight into the card list | `getChapter(nxt)` (:279) returns a `ChapterRecord` whose `roman` is a **method** (:105), where Python's is a `@property`. The story scene's normaliser does `_pick(raw, "roman")` (`story_scene.py:284`) and would receive a *function* in TS, silently dropping the chapter numeral from the plate. | ⛔ **gap V1** |
-| `story.json` | `S.EPILOGUE` | `EPILOGUE` (`core/story.ts:223`) | ✅ |
+| `story.json` | `S.get_beat(i).title/.intro/.outro/.speaker` | `getBeat(i).title/.intro/.outro/.speaker` (`core/story.ts:278`, `StoryBeat` :33-59) | ✅ |
+| `story.json` | `S.StoryCard(title=, lines=, speaker=)` | `StoryCard` is an **`interface`**, not a class (`core/story.ts:68-76`) - build a plain object literal `{ title, lines, speaker }` | ⚠ shape shim |
+| `story.json` | `S.chapter_start(nxt)` | `chapterStart(nxt)` (:317) | ✅ |
+| `story.json` | `S.get_chapter(nxt)` appended straight into the card list | `getChapter(nxt)` (:289) returns a `ChapterRecord` whose `roman` is a **method** (`Chapter` :92, impl :113), where Python's is a `@property`. The story scene's normaliser does `_pick(raw, "roman")` (`story_scene.py:284`) and would receive a *function* in TS, silently dropping the chapter numeral from the plate. | ⛔ **gap V1** |
+| `story.json` | `S.EPILOGUE` | `EPILOGUE` (`core/story.ts:232`) | ✅ |
 | `SaveData` | `save.total_stars(diff.key)` / `save.total_stars()` | `totalStars(difficulty \| null)` (`core/save.ts:703`) | ✅ |
 | `SaveData` | `save.max_stars()` | `maxStars()` (:717) = `LEVEL_COUNT * MAX_STARS` = 36 | ✅ |
 | `SaveData` | `save.beat_seen(i)` / `save.mark_beat_seen(i)` | `beatSeen(i)` (:920) / `markBeatSeen(i)` (:930) | ✅ |
 | `SaveData` | `save.set_story_progress(nxt)` / `set_story_complete(True)` / `flush()` | `setStoryProgress` (:901) / `setStoryComplete` (:911) / `flush()` (:655) | ✅ |
-| `palette` | `P.theme_for_level(nxt)` (the theme handed to `StoryScene`) | `themeForLevel(nxt)` (`core/palette.ts:261`) | ✅ |
+| `palette` | `P.theme_for_level(nxt)` (the theme handed to `StoryScene`) | `themeForLevel(nxt)` (`core/palette.ts:334`) | ✅ |
 
 ### 8.13 Capture cross-check
 
@@ -5642,10 +6211,11 @@ Everything in §7.9, plus:
 | NEXT LEVEL darker-filled, REPLAY ringed | ✅ `primary` vs `ghost`; the pointer sits on REPLAY |
 
 **`captures/12-victory-story.png`** - state B: identical to A except the sub row reads
-`CHAPTER II  -  LEVEL 04  -  SOLAR FLARE` (✅ `_chapter_line()` story form concatenated with
-`"  -  {name}"`) and the row is CONTINUE / REPLAY / MENU at `212 / 506 / 800` (✅ width 268,
-gap 26). Same panel, same stars, same score - confirming that story mode changes *only* the
-chapter prefix and the button row.
+`CHAPTER II   -   LEVEL 04  -  SOLAR FLARE` (✅ `_chapter_line()`'s story form, **three** spaces
+around its dash, concatenated by `"{}  -  {}"` with **two** around the second - the two gaps are
+genuinely different widths and the capture shows it) and the row is CONTINUE / REPLAY / MENU at
+`212 / 506 / 800` (✅ width 268, gap 26). Same panel, same stars, same score - confirming that
+story mode changes *only* the chapter prefix and the button row.
 
 **`captures/13-victory-final.png`** - state C (free play, level 12 "Prism Core", NORMAL, 980):
 
@@ -5660,18 +6230,2657 @@ chapter prefix and the button row.
 | REPLAY / LEVEL SELECT / MENU at `216 / 506 / 796` | ✅ 3 specs, width 268, gap 22, `x0 = 216` |
 | REPLAY drawn as the bright/filled button | ✅ style flips to `primary` when `final` (:908) |
 
-Unaccounted for in all four captures - all attributable elsewhere: the `60.0 fps` readout
-(shell debug), the cursor sprite, the post-chain vignette/bloom/aberration, the background art
-itself (`lava` for levels 1-6 region, `prism` for level 12), `draw_panel`'s frosted fill and
-rim glow, and `Button`'s hover lift/glow. Nothing on screen is unexplained by this section
-plus `ui.md` plus the background specs.
+Unaccounted for in all three victory captures - all attributable elsewhere: the `60.0 fps`
+readout (shell debug), the cursor sprite, the post-chain vignette/bloom/aberration, the
+background art itself (one style per level, `theme.bg_style`: `lava` is level 4's, `prism` is
+level 12's - `THEMES` (`palette.py:98`) has exactly 12 entries, one per level, and
+`theme_for_level` wraps with `index % len(THEMES)` (:224-228)),
+`draw_panel`'s frosted fill and rim glow, and `Button`'s hover lift/glow. Nothing on screen is
+unexplained by this section plus `ui.md` plus the background specs.
 
 ### 8.14 Gaps and open questions
 
-* **V1** - `Chapter.roman` is a method in TS but a property in Python, and `VictoryScene` puts
-  a raw `Chapter` into the card stack. Either the story scene's card normaliser must call it,
-  or `_story_cards` should hand over `{title: chapter.title, lines: chapter.blurb, roman: chapter.roman()}`.
+* **V1 - open.** `Chapter.roman` is a method in TS (`core/story.ts:92`, impl :113) but a
+  property in Python, and `VictoryScene` puts a raw `Chapter` into the card stack. Either the
+  story scene's card normaliser must call it, or `_story_cards` should hand over
+  `{title: chapter.title, lines: chapter.blurb, roman: chapter.roman()}`.
   Decide in the StoryScene section; flagged here because this scene is the only producer.
-* **P1** (§7.11) - `core/palette.ts` cannot build a derived `Theme`; needed by the game-over
-  mute. Victory does not need it.
+  The same shim bites `_chapter_line()` on both screens (§7.9), where the fix is just
+  `getChapter(i).roman()`.
+* **P1 - closed** (§7.11): `web/src/ui/muteTheme.ts` ships `mute` / `muteTheme` with the `hex`
+  mirror rebuilt. Victory does not need it anyway - it draws the level theme at full strength.
 * No `save.record` / `unlockThrough` on either screen - see §8.9. Assert it in review.
+* Victory needs nothing else from the core: `getBeat` / `getChapter` / `chapterStart` /
+  `EPILOGUE` / `markBeatSeen` / `setStoryProgress` / `setStoryComplete` / `flush` /
+  `totalStars` / `maxStars` all exist (§8.12). The open contract is the receiving one -
+  `StoryScene` must accept `{ cards, next_scene, next_kwargs, theme }` under whatever names the
+  story-scene section settles on (§6.15 flag 6).
+## 9. Settings (`SettingsScene`)
+
+**Ground truth:** `E:/SnakeGame/snake/scenes/settings.py`, lines 1-1176 (the whole file).
+**Reference capture:** `E:/SnakeGame/captures/04-settings.png` (level index 0, "Neon Grid").
+**Suggested TS home:** `web/src/scenes/SettingsScene.ts`, `class SettingsScene extends Scene`,
+registered alongside the other scenes in `web/src/main.ts:57-65` (the gameplay line is
+`main.ts:58`) — `game.registerScene("settings", (g) => new SettingsScene(g, save, sound))`.
+
+This is the only scene that *writes* to `SaveData` on almost every interaction and the only one
+that reaches into the effect stack. It is also the scene with the largest gap between what the
+Python does and what the web can do: **display mode has no browser equivalent** (§9.11.1), and
+the four visual-effect switches have **no field in either save schema** (§9.11.4).
+
+The UI kit call sites recorded here (`draw_panel` → `Panel`, `draw_text` → `Label`, `Button`)
+are specified in `docs/port/ui.md`; this section records only *what the scene asks for*.
+
+---
+
+### 9.1 Identity and registration
+
+| Property | Value | Source |
+|---|---|---|
+| Python class | `SettingsScene(Scene)` | settings.py:204 |
+| File / lines | `snake/scenes/settings.py`, 204-1176 (module 1-1176) | |
+| Registry key | `C.SCENE_SETTINGS = "settings"` → `("settings", "SettingsScene")` | config.py:199; main.py:42 |
+| TS registry key | `SCENES.SETTINGS = "settings"` | `web/src/app/Scene.ts:74` |
+| `transparent` | `False` | settings.py:207 |
+| `blocks_update` | `True` | settings.py:208 |
+| TS flag spelling | `static transparent = false` / `static blocksUpdate = true`, read through the instance getters | `web/src/app/Scene.ts:20-22, 54-60` |
+| Reached by **switch** | `MenuScene`: `game.switch_scene(C.SCENE_SETTINGS, back=C.SCENE_MENU)` | menu.py:441 |
+| Reached by **push** | `PauseScene._open_settings`: `game.push_scene(C.SCENE_SETTINGS, back=C.SCENE_PAUSE)`, falling back to a bare `push_scene` on `TypeError`. Stack depth becomes **3** (game → pause → settings) | pause.py:238-241 |
+| Leaves to | whatever `back` named — see the transition table in §9.10. Never pushes anything | settings.py:520-555 |
+| Entry kwargs | `back` only. Anything else is ignored (`on_enter(**kwargs)` reads exactly one key) | settings.py:261 |
+
+Both `transparent` and `blocksUpdate` already default to exactly these values on the TS `Scene`
+base, so the port declares **neither**.
+
+Those are the **only two call sites in the whole game**: a grep for `SCENE_SETTINGS` across
+`snake/scenes/*.py` returns menu.py:441 and pause.py:238/241 (plus a docstring mention at
+menu.py:22) and nothing else. The level-select, help, story and result screens do not offer a
+settings route.
+
+**Both call sites are already ported and are waiting for this scene:**
+
+| Caller | TS | Note |
+|---|---|---|
+| `MenuScene` | `this.go(SCENES.SETTINGS, { back: SCENES.MENU })` | `MenuScene.ts:335-336`; `S` / `O` also fire it, `MenuScene.ts:374` |
+| `PauseScene` | `this.game.pushScene(SCENES.SETTINGS, { back: SCENES.PAUSE })` | `PauseScene.ts:275-280`, **guarded** by `game.registeredScenes().includes(SCENES.SETTINGS)` so the button is inert until this scene is registered; `S` / `O` at `PauseScene.ts:334` |
+
+So the only wiring work is `main.ts` — remove nothing, add one `registerScene` line.
+
+`back` is validated against a nine-name whitelist (`_resolve_back`, settings.py:284-293):
+`menu, levels, game, pause, gameover, victory, help, mode, story`. Anything else — including
+`"settings"` itself, `None`, and a non-string — becomes `C.SCENE_MENU`. The comparison is
+`str(value or "").strip().lower()`, so whitespace and case are forgiven.
+
+---
+
+### 9.2 Scene-local constants
+
+All module-level, none of them in `config.json`. Put them at the top of `SettingsScene.ts` as
+module `const`s (same rule as §1.2: `export_data.py` does not emit them, so a copy in
+`config.ts` would drift).
+
+#### 9.2.1 Layout (settings.py:73-95)
+
+| Name | Value | Line | Derivation |
+|---|---|---|---|
+| `_PAD` | `40` | 73 | left/right gutter |
+| `_COL_W` | `800` | 74 | settings column width |
+| `_PREVIEW_X` | `872` | 75 | |
+| `_PREVIEW_W` | `368` | 76 | `C.WINDOW_W - 872 - 40` |
+| `_ROW_DISPLAY` | `Rect(40, 96, 800, 100)` | 78 | right = 840, bottom = 196 |
+| `_ROW_DIFF` | `Rect(40, 204, 800, 172)` | 79 | bottom = 376 |
+| `_ROW_SOUND` | `Rect(40, 384, 800, 80)` | 80 | bottom = 464 |
+| `_ROW_FX` | `Rect(40, 472, 800, 112)` | 81 | bottom = 584 |
+| `_ROW_RESET` | `Rect(40, 592, 800, 96)` | 82 | bottom = 688 |
+| `_PREVIEW_PANEL` | `Rect(872, 96, 368, 524)` | 84 | right = 1240, bottom = 620 |
+| `_WELL` | `Rect(888, 140, 336, 300)` | 85 | `(_PREVIEW_X + 16, 140, _PREVIEW_W - 32, 300)`; right = 1224, bottom = 440 |
+| `_BACK_RECT` | `Rect(850, 622, 300, 58)` | 91 | `C.UI_BUTTON_W/H`; right = 1150, bottom = 680 |
+| `_ARROW_W` | `44` | 94 | |
+| `_VALUE_W` | `166` | 95 | |
+
+`_BACK_RECT` carries a five-line comment (settings.py:86-90) explaining why BACK is **not**
+centred in the bottom-right corner: the CRT bezel in `gfx/effects.py` passed only ~29 % of the
+drawn light at the panel-centred `(906, 636)`, and this screen's only mouse exit must be
+readable. `(850, 622)` gets ~0.52 through the bezel while still clearing the reset row
+(which ends at x = 840) and the preview panel above (which ends at y = 620).
+**Port note:** the TS `CrtFilter` vignette is a different curve. Do not "fix" the offset rect —
+it is authored geometry now, and moving it would break the capture cross-check.
+
+#### 9.2.2 Copy (settings.py:100-116)
+
+| Name | String |
+|---|---|
+| `_DISPLAY_DESC` | `"How the game fills your screen.  F11 toggles fullscreen anywhere in the game."` (two spaces after the full stop) |
+| `_DIFF_DESC` | `"Lives, pace and how cruel your own coil is."` |
+| `_SOUND_DESC` | `"Menu clicks, pickups, explosions and the win fanfare."` |
+| `_FX_DESC` | `"Post-processing on the finished frame.  Turn these off if the frame rate dips."` |
+| `_RESET_DESC` | `"Erases every unlock, star and best score.  Your settings are kept."` |
+| `_RESET_WARN` | `"Every star, unlock and best score, on every difficulty."` |
+| `_PREVIEW_HINT` | `"Hover a switch to see what it does - the strip above shows it live."` |
+
+`_FX_TOGGLES: Tuple[Tuple[str, str, str], ...]` (settings.py:109-114) — `(action key, button
+name, hover description)`, in draw order:
+
+| # | key | name | description |
+|---|---|---|---|
+| 0 | `bloom` | `BLOOM` | `"Soft light bleeding out of every neon edge."` |
+| 1 | `scanlines` | `SCANLINES` | `"Faint CRT lines laid over the whole frame."` |
+| 2 | `grain` | `GRAIN` | `"Fine animated film noise, sold at low light."` |
+| 3 | `shake` | `SHAKE` | `"The camera kicks when you crash or clear a level."` |
+
+Runs of two and three spaces are load-bearing in the *labels* (`"SOUND  ON"`, `"BLOOM  ON"`,
+`"F11  FULLSCREEN"`, `"3 LIVES   1.00x SPEED   ..."`). Pixi `Text` preserves them; an
+HTML-backed text path would collapse them and lose the column alignment (same warning as §4.5).
+
+#### 9.2.3 Timing and preview tuning (settings.py:119-136)
+
+| Name | Value | Meaning |
+|---|---|---|
+| `_INTRO_TIME` | `0.32` s | panel wash-in |
+| `_PREVIEW_SPEED` | `132.0` px/s | assigned to `snake.speed` (default would be `C.SNAKE_BASE_SPEED = 210`) |
+| `_PREVIEW_LENGTH` | `11` | preview snake segments |
+| `_BLOOM_DOWNSCALE` | `6` | |
+| `_BLOOM_STRENGTH` | `150` | 0..255 multiply applied to the small copy before the additive blit → `150/255 = 0.588` |
+| `_BLOOM_EVERY` | `2` | the blur is rebuilt every 2nd frame and re-used in between |
+| `_GRAIN_FRAMES` | `4` | |
+| `_SHAKE_PERIOD` | `2.3` s | between demo camera knocks |
+| `_SHAKE_TRAUMA` | `1.0` | |
+| `_SHAKE_DECAY` | `2.4` /s | linear, so a knock lasts `1.0 / 2.4 = 0.417` s |
+| `_SHAKE_PIXELS` | `7.0` px | peak amplitude at trauma 1 |
+
+Pulled from elsewhere: `C.WINDOW_W/H` = 1280/720, `C.UI_BUTTON_W/H` = 300/58,
+`C.UI_CORNER` = 12, `C.MAX_DT` = 0.05, `C.DISPLAY_MODES`, `C.DISPLAY_MODE_LABELS`,
+`C.DEFAULT_DISPLAY_MODE`, `C.GAME_MODES`, and the nine `C.SCENE_*` names.
+
+---
+
+### 9.3 Owned state — every instance attribute
+
+`__init__` is settings.py:210-241; `on_enter` is settings.py:246-274; `on_exit` is 276-281;
+`_reset_preview` (called by `on_enter`) is 749-771.
+
+| Attribute | Type | `__init__` value | Reset on entry to | Line |
+|---|---|---|---|---|
+| `t` | float | `0.0` | `0.0` | 212 / 254 |
+| `intro` | float | `0.0` | `0.0` | 213 / 255 |
+| `theme` | `P.Theme` | `P.THEMES[0]` | `_resolve_theme()` = `theme_for_level(game.level_index)`, `THEMES[0]` on any exception | 214 / 263 |
+| `background` | background object or `None` | `None` | **only if the style changed** — see below | 215 / 264 |
+| `_bg_style` | str | `""` | same | 216 / 264 |
+| `back_target` | str | `C.SCENE_MENU` | `_resolve_back(kwargs.get("back"))` | 219 / 261 |
+| `buttons` | `List[Button]` | `[]` | `_build_buttons()` — full rebuild | 221 / 271 |
+| `confirming` | bool | `False` | `False` (also `False` in `on_exit`) | 222 / 256 |
+| `_leaving` | bool | `False` | `False` (also `False` in `on_exit`) | 223 / 257 |
+| `fx_hint` | str | `""` | `""` | 224 / 260 |
+| `flash` | float 0..1 | `0.0` | `0.0` | 225 / 258 |
+| `reset_flash` | float 0..1 | `0.0` | `0.0` | 226 / 259 |
+| `_buf` | `Surface` or `None` | `None` | `Surface(336, 300)` if `None` or wrong size (`on_exit` sets it to `None`, so **always** rebuilt) | 229 / 758-759 |
+| `_snake` | `Snake` or `None` | `None` | `Snake(168.0, 150.0, 0.0, length=11)` with `.speed = 132.0` | 230 / 767-769 |
+| `_orbit` | float | `0.0` | `0.0` | 231 / 751 |
+| `_shake` | float | `0.0` | `0.0` | 232 / 752 |
+| `_shake_next` | float | `2.3` | `2.3` | 233 / 753 |
+| `_scanlines` | `Surface` or `None` | `None` | `None` **indirectly** (nulled inside the `_buf is None` branch), rebuilt lazily on first draw | 234 / 760 |
+| `_bloom_small` | `Surface` or `None` | `None` | `None`, same branch | 235 / 761 |
+| `_bloom_full` | `Surface` or `None` | `None` | `None`, same branch | 236 / 762 |
+| `_bloom_tick` | int | `0` | `0` | 237 / 756 |
+| `_grain` | `List[Surface]` | `[]` | `[]`, same branch | 238 / 763 |
+| `_grain_index` | int | `0` | `0` | 239 / 754 |
+| `_grain_at` | float | `0.0` | `0.0` | 240 / 755 |
+| `_rng` | `random.Random(0x5E77)` | seeded once | **never re-seeded** | 241 |
+
+**Built in `__init__` and not reset in `on_enter`:**
+
+1. **`background` / `_bg_style`** — deliberate. `_ensure_background` (settings.py:301-311)
+   rebuilds only when `str(theme.bg_style)` differs from the cached `_bg_style`. **Latent bug:**
+   if two themes ever shared a `bg_style` the panel would keep the *previous* theme's colours.
+   All 12 shipped themes have a unique `bg_style` (`grid, nebula, circuit, lava, ocean, static,
+   ice, spores, machine, aurora, voidwarp, prism` — `web/src/data/themes.json`), so it can never
+   fire today. **Safe, but key the port's cache on the theme object, not the style string.**
+2. **`_rng`** — never re-seeded, so a second visit gets a *different* set of four grain frames
+   (the Mersenne stream continues where it left off: 4 frames × 1600 dots × 4 draws per dot
+   — `randrange(112)`, `randrange(100)`, `randint(90,190)`, `randint(18,46)` — = **25,600**
+   draws per rebuild). Cosmetically irrelevant, and unreproducible in TS anyway. **Safe.**
+3. The five preview caches (`_buf`, `_scanlines`, `_bloom_small`, `_bloom_full`, `_grain`) are
+   reset *transitively*: `on_exit` sets `_buf = None`, and `_reset_preview`'s
+   `if self._buf is None or size mismatch` branch nulls the other four. So on every re-entry the
+   scene re-renders the 100-line scanline lattice and 4 × 1600 = 6,400 `set_at` noise dots.
+   **In the port, bake all of these once in the constructor and never drop them** — none of them
+   depends on entry state.
+
+`self.game` comes from `Scene.__init__` (contracts.py) and is not listed above.
+
+---
+
+### 9.4 Construction versus entry
+
+| Built | Where | Why |
+|---|---|---|
+| zeroed scalars, the `Random(0x5E77)` stream | `__init__` (210-241) | no fonts, no surfaces, no buttons |
+| theme | `on_enter` → `_resolve_theme` | `game.level_index` can have moved |
+| background | `on_enter` → `_ensure_background` | style-keyed cache; usually a no-op after the first entry |
+| the shake guard on `fx` | `on_enter` (267-269) | must exist before the first SHAKE toggle |
+| **all 14-15 buttons** | `on_enter` → `_build_buttons` (349-428) | labels and styles are read from live values |
+| preview snake + buffer + overlay caches | `on_enter` → `_reset_preview` (749-771) | a re-entry must start from a clean pose |
+
+Button count, in list order: display 3 (`<`, value, `>`) + difficulty 4 + sound 1 + fx 4 +
+reset **1 or 2** + BACK 1 = **14** normally, **15** while confirming.
+
+`_build_buttons` is also called **mid-scene**, twice: on `reset` (arming the confirm step,
+settings.py:502) and on `reset_cancel` / after `_do_reset` (507 / 711). It always **discards and
+rebuilds the whole list**, including BACK, so hover state and the click debounce on every button
+are lost at that moment. That is what makes the `hover` cue fire when the confirm row swaps under
+a stationary cursor (§9.12).
+
+**TS shape.** Build every `Button`, `Panel`, `Label` and the preview sub-tree **once in the
+constructor** and keep them parented. The real kit signatures the call sites use:
+
+```ts
+new Button(fonts, { x, y, w, h }, label, { style, data, font })  // ui/Button.ts:425, 450
+panel.setRect(x, y, w, h)                                        // ui/panel.ts:303
+panel.setStyle(accent, alpha255, border, glow)                   // ui/panel.ts:329
+label.set(text, style); label.place(x, yTop, "left"|"center"|"right")   // ui/text.ts:149, 173
+label.setColor(rgb); label.setAlpha(a01); label.setShadow(on)     // ui/text.ts:192, 197, 201
+```
+
+`Panel.setStyle`'s first argument is the panel accent, i.e. `theme.accent` — `draw_panel` reads
+it off the theme itself (ui.py:239) and this scene never overrides it, `danger` included.
+`Button`'s `rect` is a mutable `RectLike` copy, so nothing here needs to move it after construction.
+
+
+`onEnter` then: resets the scalars, re-resolves the theme
+and background, re-labels/re-styles every control (`_refresh_labels`, §9.6), re-poses the preview
+snake, and sets the reset row to its non-confirming layout. The confirm swap is a
+`visible` flip between two pre-built button pairs, **not** a rebuild — but you must then
+reproduce the two side effects the Python rebuild has for free: zero the animation state of the
+buttons that appear, and let `justEntered` fire for one already under the cursor.
+
+`Button` re-exposes only `hovered`, `justEntered` and `hoverT` (`pressT` is get-only,
+Button.ts:540-555), so reach through the state object, whose fields are all public and mutable
+(Button.ts:343-353):
+
+```ts
+const s = btn.state;
+s.hovered = false; s.justEntered = false; s.hoverT = 0; s.pressT = 0;
+s.armed = false;   s.cool = 0;            s.flash = 0;
+```
+
+---
+
+### 9.5 Layout — the complete coordinate table (design pixels, 1280 x 720)
+
+Resting state: `intro = 1`, so `_panel_alpha(full) = full`. Every `draw_text` y is the **top**
+edge and every x is the left / centre / right edge per `align` (ui.py:268-277).
+`_mix(a, b, t)` = `P.lerp_color(a, b, t)` (settings.py:142-145).
+
+Shorthand: `A = theme.accent`, `A2 = theme.accent2`, `TX = theme.text`, `TD = theme.text_dim`,
+`BG = theme.bg_bottom`, `G = theme.grid`, `W = P.UI_WHITE`.
+
+#### 9.5.1 Header (`_draw_header`, settings.py:852-862)
+
+| # | Element | x | y | size | anchor | font | colour | drawn when |
+|---|---|---|---|---|---|---|---|---|
+| 1 | `"SETTINGS"` | 40 | 18 | h1 | left / top | `fonts.h1` = display@42 | `_mix(A, W, 0.3 + 0.2*pulse(t, 1.6))` → factor 0.30..0.50 | always |
+| 2 | `"everything here is saved the moment you change it"` | 44 | 64 | small (17) | left / top | `fonts.small` | `TD` | always |
+| 3 | `"BACK RETURNS TO {back_target.upper()}"` | 1240 | 30 | tiny (14) | **right** / top | `fonts.tiny` | `P.shade(TD, 0.8)` | always |
+
+Row 3 is the only place `back_target` is visible; from the pause overlay it reads
+`BACK RETURNS TO PAUSE`.
+
+#### 9.5.2 Shared row furniture (`_row_panel`, settings.py:876-885)
+
+Every one of the five rows draws, in this order:
+
+| Element | x | y | font | colour |
+|---|---|---|---|---|
+| panel | `rect.x` | `rect.y` | — | `draw_panel(surface, rect, theme, alpha=_panel_alpha(214), glow=glow)`; `border` defaults `True`; the panel's own accent is `theme.accent` (ui.py:239) |
+| title | `rect.x + 20` | `rect.y + 12` | `_font("ui", 18, True)` = `fonts.get(18, bold)` | `_mix(P.UI_BAD if danger else A2, W, 0.3)` |
+| description | `rect.x + 20` | `rect.y + 36` | `fonts.tiny` (14) | `TD` |
+
+`danger` **never reaches `draw_panel`** — it only swaps the *title* colour from `theme.accent2` to
+`P.UI_BAD`. All five row panels and the preview panel are drawn with the same accent,
+`theme.accent`, because `draw_panel` reads it off the theme (ui.py:239).
+
+`glow` defaults to `0.22`; only the confirming reset row and the preview panel override it.
+`_panel_alpha(full)` = `int(clamp(full * (0.45 + 0.55 * ease_out_cubic(clamp(intro, 0, 1))), 0, 255))`
+(settings.py:865-874) — panels start at 45 % of full opacity, never at zero, so the layout is
+readable on frame one.
+
+#### 9.5.3 Display-mode row (`_draw_display_row`, 888-893; buttons 359-375)
+
+Panel `(40, 96, 800, 100)`, `cy = row.y + 50 = 146`, `row.right = 840`.
+
+| # | Element | x | y | size | anchor | font | colour / style | drawn when |
+|---|---|---|---|---|---|---|---|---|
+| 4 | panel | 40 | 96 | 800x100 | top-left | — | `alpha=214, glow=0.22` | always |
+| 5 | `"DISPLAY MODE"` | 60 | 108 | ui 18 bold | left / top | `get(18, true)` | `_mix(A2, W, 0.3)` | always |
+| 6 | `_DISPLAY_DESC` | 60 | 132 | tiny | left / top | `fonts.tiny` | `TD` | always |
+| 7 | `"F11  FULLSCREEN"` | 60 | 160 | tiny | left / top | `fonts.tiny` | `_mix(A, W, 0.2)` | always |
+| 8 | `Button "<"` | **536** | **124** | 44x44 | rect | `get(24, true)` | style `ghost`, `data="display_prev"` | always |
+| 9 | `Button` display label | **584** | **124** | 166x44 | rect | `get(20, true)` | style `primary`, `data="display_next"` | always |
+| 10 | `Button ">"` | **754** | **124** | 44x44 | rect | `get(24, true)` | style `ghost`, `data="display_next"` | always |
+
+Derivation (pygame's `rect.center = (cx, cy)` sets `x = cx - w // 2`):
+`left.center = (840 - 20 - 88 - 166 - 8, 146) = (558, 146)` → `(536, 124, 44, 44)`;
+`value.center = (558 + 22 + 4 + 83, 146) = (667, 146)` → `(584, 124, 166, 44)`;
+`right.center = (667 + 83 + 4 + 22, 146) = (776, 146)` → `(754, 124, 44, 44)`.
+
+Label = `C.DISPLAY_MODE_LABELS[mode]` → `WINDOWED` / `BORDERLESS` / `FULLSCREEN`
+(config.py:40-44), defaulting to `"WINDOWED"`.
+
+Rows 9 and 10 **share `data = "display_next"`** — clicking the value itself advances the mode,
+exactly like the right arrow. `_refresh_labels` disambiguates them by width
+(`key == "display_next" and btn.rect.w == _VALUE_W`, settings.py:443). In the port, give them
+distinct identities (e.g. `data: "display_next"` plus a boolean `isValueChip`) rather than
+comparing widths.
+
+#### 9.5.4 Difficulty row (`_draw_difficulty_row`, 895-924; buttons 377-388)
+
+Panel `(40, 204, 800, 172)`. Chip width = `(800 - 36 - 12*3) // 4 = 182`;
+`x_i = 40 + 18 + i * 194` → **58, 252, 446, 640**; `y = 204 + 64 = 268`; 182 x 50.
+
+| # | Element | x | y | size | anchor | font | colour / style | drawn when |
+|---|---|---|---|---|---|---|---|---|
+| 11 | panel | 40 | 204 | 800x172 | top-left | — | `alpha=214, glow=0.22` | always |
+| 12 | `"DIFFICULTY"` | 60 | 216 | ui 18 bold | left / top | `get(18, true)` | `_mix(A2, W, 0.3)` | always |
+| 13 | `_DIFF_DESC` | 60 | 240 | tiny | left / top | `fonts.tiny` | `TD` | always |
+| 14-17 | 4 chip `Button`s: `EASY / NORMAL / HARD / EXPERT` | 58 / 252 / 446 / 640 | 268 | 182x50 | rect | `get(21, true)` | `primary` when `diff.key == selected`, else `ghost`; `data = "diff:" + key` | always |
+| 18-21 | 4 colour bars | `btn.x + 8` → 66 / 260 / 454 / 648 | `btn.bottom + 5` = **323** | 166x3, `border_radius=2` | top-left | — | `diff.color` when selected, else `P.shade(diff.color, 0.35)` | always |
+| 22 | `selected.blurb` | 60 | **330** | small (17) | left / top | `fonts.small` | `_mix(TX, selected.color, 0.45)` | always |
+| 23 | stakes line | 60 | **353** | tiny | left / top | `fonts.tiny` | `P.shade(selected.color, 0.9)` | always |
+| 24 | `"x{score_mult:.2f} SCORE"` | 820 | **353** | tiny | **right** / top | `fonts.tiny` | `P.UI_GOLD` | always |
+
+The chip label is `diff.label` = `Difficulty.name.upper()` (difficulty.py:187-190).
+
+Stakes string (settings.py:913-916):
+```
+"{lives} LIVES   {speed_mult:.2f}x SPEED   {tail}"
+tail = "SELF-COLLISION OFF"  if not selected.self_kills
+       else "SELF-COLLISION " + str(selected.self_mode).upper()
+```
+where `lives = lives_for(selected)` and `self_kills = (self_mode != "off")`
+(difficulty.py:197-200). Three-space separators. For the four shipped difficulties:
+
+| key | label | lives | speed_mult | self_mode | stakes line | score_mult | color |
+|---|---|---|---|---|---|---|---|
+| `easy` | EASY | 5 | 0.82 | `off` | `5 LIVES   0.82x SPEED   SELF-COLLISION OFF` | 0.80 | (86, 240, 160) |
+| `normal` | NORMAL | 3 | 1.00 | `forgiving` | `3 LIVES   1.00x SPEED   SELF-COLLISION FORGIVING` | 1.00 | (96, 202, 255) |
+| `hard` | HARD | 2 | 1.15 | `normal` | `2 LIVES   1.15x SPEED   SELF-COLLISION NORMAL` | 1.35 | (255, 168, 72) |
+| `expert` | EXPERT | 1 | 1.30 | `strict` | `1 LIVES   1.30x SPEED   SELF-COLLISION STRICT` | 1.80 | (255, 84, 132) |
+
+(difficulty.py:209-295. `1 LIVES` is not a typo in this doc — the format string has no plural
+rule. Reproduce it. Blurbs, in order: `"Drift, coil and never once die to your own tail."`,
+`"The serpent as intended - fair, fast, unforgiving of sloppiness."`,
+`"Faster hazards, thinner mercy, and your own coil bites back."`,
+`"One life. No mercy. The grid remembers every mistake."`)
+
+#### 9.5.5 Sound row (`_draw_sound_row`, 926-939; button 390-395)
+
+Panel `(40, 384, 800, 80)`.
+
+| # | Element | x | y | size | anchor | font | colour / style | drawn when |
+|---|---|---|---|---|---|---|---|---|
+| 25 | panel | 40 | 384 | 800x80 | top-left | — | `alpha=214, glow=0.22` | always |
+| 26 | `"SOUND"` | 60 | 396 | ui 18 bold | left / top | `get(18, true)` | `_mix(A2, W, 0.3)` | always |
+| 27 | `_SOUND_DESC` | 60 | 420 | tiny | left / top | `fonts.tiny` | `TD` | always |
+| 28-36 | 9 meter bars, `i = 0..8` | `int(510 + 9i)` → 510, 519, ... 582 | `int(438 - h)` | `5 x int(h)`, `border_radius=2` | top-left | — | see below | always |
+| 37 | `Button "SOUND  ON"` / `"SOUND  OFF"` | **654** | **404** | 166x44 | rect | `get(20, true)` | `primary` when unmuted, `ghost` when muted; `data="sound"` | always |
+
+Meter bar height and colour (settings.py:932-939), `base_x = row.x + 470 = 510`:
+```
+h   = 3.0                                    if muted
+    = 3.0 + 14.0 * pulse(t * 5.0 + i * 0.7, 1.0)     otherwise   -> 3..17 px
+col = P.shade(TD, 0.7)                       if muted
+    = _mix(A, P.UI_GOOD, i / 8.0)                     otherwise
+```
+Bars grow **upward** from a fixed baseline at `y = row.y + 54 = 438`.
+`pulse(x, s) = 0.5 + 0.5*sin(x*s)` (contracts.py:214 → `pulse` in `core/mathx.ts:74`); with
+`s = 1.0` and the argument already scaled by 5.0 the period is `2π/5 = 1.257` s, and the 0.7
+phase step gives a running wave across the nine bars.
+
+Button rect: `center = (840 - 20 - 83, 384 + 42) = (737, 426)` → `(654, 404, 166, 44)`.
+
+#### 9.5.6 Visual-effects row (`_draw_fx_row`, 941-943; buttons 397-407)
+
+Panel `(40, 472, 800, 112)`. Same width formula as the chips → 182; `x_i = 58, 252, 446, 640`;
+`y = 472 + 62 = 534`; 182 x 42.
+
+| # | Element | x | y | size | anchor | font | colour / style | drawn when |
+|---|---|---|---|---|---|---|---|---|
+| 38 | panel | 40 | 472 | 800x112 | top-left | — | `alpha=214, glow=0.22` | always |
+| 39 | `"VISUAL EFFECTS"` | 60 | 484 | ui 18 bold | left / top | `get(18, true)` | `_mix(A2, W, 0.3)` | always |
+| 40 | `_FX_DESC` | 60 | 508 | tiny | left / top | `fonts.tiny` | `TD` | always |
+| 41-44 | 4 toggle `Button`s | 58 / 252 / 446 / 640 | 534 | 182x42 | rect | `get(18, true)` | `primary` when on, `ghost` when off; `data = "fx:" + key` | always |
+
+Labels are `_toggle_label(name, on)` = `"{name}  {ON|OFF}"` (two spaces, settings.py:433-435) →
+`BLOOM  ON`, `SCANLINES  OFF`, …
+
+This row draws **no** extra text of its own; the hovered switch's description lands in the
+preview panel instead (row 53).
+
+#### 9.5.7 Reset-progress row (`_draw_reset_row`, 945-971; buttons 409-424)
+
+Panel `(40, 592, 800, 96)`. Two mutually exclusive states.
+
+**Normal (`confirming == False`):**
+
+| # | Element | x | y | size | anchor | font | colour / style | drawn when |
+|---|---|---|---|---|---|---|---|---|
+| 45 | panel | 40 | 592 | 800x96 | top-left | — | `alpha=214, glow=0.22`, `danger=True` | always |
+| 46 | `"RESET PROGRESS"` | 60 | 604 | ui 18 bold | left / top | `get(18, true)` | `_mix(P.UI_BAD, W, 0.3)` | always |
+| 47 | `_RESET_DESC` | 60 | 628 | tiny | left / top | `fonts.tiny` | `TD` | always |
+| 48 | progress summary | 60 | **654** | tiny | left / top | `fonts.tiny` | `_mix(TD, P.UI_GOOD, 0.2 + 0.6 * reset_flash)` | `summary != ""` |
+| 49 | `Button "RESET PROGRESS"` | **590** | **623** | 230x46 | rect | `get(19, true)` | style `danger`, `data="reset"` | always |
+
+Summary string (settings.py:958-966):
+`"{cleared} / {total} LEVELS CLEARED   {stars} / {max_stars} STARS   BEST {highscore:,}"`
+from `save.progress()`, `save.total_stars()`, `save.max_stars()`, `save.highscore`. Three-space
+separators; `{:,}` is a **thousands separator** (`4,210`) — in TS,
+`Number(...).toLocaleString("en-US")` or a hand-rolled grouper, not the default `String(n)`.
+On any exception the whole line is dropped.
+Button rect: `center = (840 - 20 - 115, 592 + 54) = (705, 646)` → `(590, 623, 230, 46)`.
+
+**Confirming (`confirming == True`):**
+
+| # | Element | x | y | size | anchor | font | colour / style | drawn when |
+|---|---|---|---|---|---|---|---|---|
+| 45' | panel | 40 | 592 | 800x96 | top-left | — | `alpha=214`, `glow = 0.35 + 0.25*pulse(t, 4.0)` → 0.35..0.60, period 1.571 s, `danger=True` | confirming |
+| 46' | `"ARE YOU SURE?"` | 60 | 604 | ui 18 bold | left / top | `get(18, true)` | `_mix(P.UI_BAD, W, 0.3)` | confirming |
+| 47' | `_RESET_WARN` | 60 | 628 | tiny | left / top | `fonts.tiny` | `TD` | confirming |
+| 48' | `"CONFIRM ERASES EVERYTHING"` | 60 | **654** | tiny | left / top | `fonts.tiny` | `_mix(P.UI_BAD, W, 0.35 + 0.35*pulse(t, 6.0))` → factor 0.35..0.70, period 1.047 s | confirming |
+| 49a | `Button "CANCEL"` | **490** | **631** | 150x46 | rect | `get(20, true)` | style `ghost`, `data="reset_cancel"` | confirming |
+| 49b | `Button "CONFIRM"` | **652** | **631** | 168x46 | rect | `get(20, true)` | style `danger`, `data="reset_confirm"` | confirming |
+
+Derivation: `confirm.center = (840 - 20 - 84, 592 + 62) = (736, 654)` → `(652, 631, 168, 46)`;
+`cancel.center = (652 - 12 - 75, 654) = (565, 654)` → `(490, 631, 150, 46)`. Note the confirm
+pair sits **8 px lower** than the single reset button (654 vs 646) and the progress summary is
+replaced in place, not moved.
+
+#### 9.5.8 Preview panel (`_draw_preview`, 974-1012)
+
+| # | Element | x | y | size | anchor | font | colour | drawn when |
+|---|---|---|---|---|---|---|---|---|
+| 50 | panel | 872 | 96 | 368x524 | top-left | — | `draw_panel(alpha=_panel_alpha(216), glow=0.3)` | always |
+| 51 | `"PREVIEW"` | 892 | 110 | ui 18 bold | left / top | `get(18, true)` | `_mix(A2, W, 0.3)` | always |
+| 52 | the well | 888 | 140 | 336x300 | — | — | §9.8 | always |
+| 53 | hint, up to 3 lines on an **18 px** pitch | 892 | 454, 472, 490 | tiny | left / top | `fonts.tiny` | `_mix(TX, A, 0.4)` when `fx_hint` else `TD` | always |
+| 54 | `"DISPLAY"` | 892 | 518 | tiny | left / top | `fonts.tiny` | `TD` | always |
+| 55 | display label value | 1220 | 516 | ui 17 bold | **right** / top | `get(17, true)` | `_mix(A, W, 0.25 + 0.35*flash)` | always |
+| 56 | `"DIFFICULTY"` | 892 | 544 | tiny | left / top | `fonts.tiny` | `TD` | always |
+| 57 | `diff.label` | 1220 | 542 | ui 17 bold | right / top | `get(17, true)` | `_mix(diff.color, W, 0.25 + 0.35*flash)` | always |
+| 58 | `"SOUND"` | 892 | 570 | tiny | left / top | `fonts.tiny` | `TD` | always |
+| 59 | `"ON"` / `"OFF"` | 1220 | 568 | ui 17 bold | right / top | `get(17, true)` | `_mix(UI_GOOD if unmuted else UI_BAD, W, 0.25 + 0.35*flash)` | always |
+| 60 | `"EFFECTS"` | 892 | 596 | tiny | left / top | `fonts.tiny` | `TD` | always |
+| 61 | `"{n} / 4 ON"` | 1220 | 594 | ui 17 bold | right / top | `get(17, true)` | `_mix(A2, W, 0.25 + 0.35*flash)` | always |
+
+Hint text = `self.fx_hint or _PREVIEW_HINT`, greedy word-wrapped by `_wrap` (settings.py:148-169)
+to `panel.w - 40 = 328` px in the tiny face, sliced to the first **3** lines, starting at
+`_WELL.bottom + 14 = 454`. With the default hint this produces two lines (confirmed in the
+capture).
+
+**Do not port `_wrap`.** The kit already carries it: `wrapText(fonts, style, text, width, opts)`
+in `web/src/ui/wrap.ts:43`, whose header explicitly names `settings.py` as one of the five
+`_wrap` copies it replaces. The call site here is
+
+```ts
+wrapText(game.fonts, game.fonts.tiny, this.fxHint || PREVIEW_HINT, 328, { maxLines: 3 })
+```
+
+`ellipsis` stays at its default `false` — settings.py's `_wrap` never ellipsises, only
+`level_select.py`'s does. Python wraps everything and the *caller* slices `[:3]`; `wrapText`
+stops at `maxLines` instead, which yields the identical first three lines. It measures with
+`fonts.measureWidth(style, trial)` (fonts.ts:301), the counterpart of `font.size(candidate)[0]`,
+and caches on the CSS font string plus the geometry, so calling it every frame is free.
+
+Summary rows start at `_WELL.bottom + 78 = 518` on a **26 px** pitch. The label uses `y`, the
+value uses `y - 2` — a deliberate 2 px optical lift, the value face being 3 pt larger (17 vs 14).
+
+#### 9.5.9 BACK
+
+| # | Element | x | y | size | anchor | font | colour / style | drawn when |
+|---|---|---|---|---|---|---|---|---|
+| 62 | `Button "BACK"` | 850 | 622 | 300x58 | rect | `_font("h2", 30, True)` = `fonts.h2` (ui bold 30) | style `primary`, `data="back"` | always |
+
+#### 9.5.10 Font-name resolution
+
+`SettingsScene._font(name, size, bold)` (settings.py:1160-1176): `"display"` →
+`fonts.display_at(size)`; `"ui"` → `fonts.get(size, bold)`; any other name →
+`getattr(fonts, name)` **if it is a Font**, else `fonts.get(size, bold)`. Unlike `PauseScene`
+(§4.5) **no size argument here is dead** — every named lookup asks for the size the ladder
+already has:
+
+| Call | Resolves to | TS |
+|---|---|---|
+| `_font("h1", 42)` | `fonts.h1` = display@42 | `fonts.h1` |
+| `_font("small", 17)` | `fonts.small` = ui@17 | `fonts.small` |
+| `_font("tiny", 14)` | `fonts.tiny` = ui@14 | `fonts.tiny` |
+| `_font("h2", 30, True)` | `fonts.h2` = ui bold@30 | `fonts.h2` |
+| `_font("ui", N, True)` | `fonts.get(N, bold=True)` — N ∈ {17, 18, 19, 20, 21, 24} | `game.fonts.get(N, true)` |
+
+**Every `"ui"` lookup in this scene passes `bold=True`** — all eleven call sites (settings.py:365,
+370, 375, 388, 395, 407, 415, 419, 424, 883, 1009; 883 is the `_row_panel` title, shared by five
+rows). So **none** of the six sizes is on the named ladder, and two near-misses are
+traps: `get(17, True) ≠ fonts.small` and `get(21, True) ≠ fonts.body`, because `small` is
+`get(17)` and `body` is `get(21)`, both **non-bold** (fonts.py:67-68 ≡ fonts.ts:207-210). The
+only bold face on the ladder is `h2 = get(30, bold)`. Take all six from `FontBook.get`
+(fonts.ts:234), which caches per `role|px|bold`.
+
+The face objects `FontBook` returns are identity-stable, which is what makes `Label.set(text,
+style)` and `wrapText`'s cache key cheap — do not build a fresh `TextStyleOptions` per frame.
+
+---
+
+### 9.6 Button labels and the `_refresh_labels` pass
+
+`_refresh_labels` (settings.py:437-457) runs after **every** settings change and re-syncs
+labels/styles without rebuilding:
+
+| `data` | Action |
+|---|---|
+| `"display_next"` **and** `rect.w == 166` | `label = DISPLAY_MODE_LABELS[mode]` |
+| `"diff:<key>"` | `style = "primary" if key == selected else "ghost"` |
+| `"sound"` | `label = "SOUND  OFF"/"SOUND  ON"`, `style = "ghost"/"primary"` |
+| `"fx:<flag>"` | `label = "{NAME}  {ON|OFF}"`, `style = "primary"/"ghost"` |
+| anything else | untouched |
+
+Each iteration is in its own `try/except: continue`. In TS, `Button.setLabel(text)` is a no-op
+when the string is unchanged (Button.ts:519-524), so calling this every change is free; `style`
+is a plain mutable field (Button.ts:432) and re-assigning it is safe — `Button.draw`'s texture
+cache key includes it (Button.ts:593-596), so both body plates are rebuilt on the next draw.
+Because every button here is constructed with an explicit `font`, `opts.font` wins in
+`labelFont()` (Button.ts:513) and a `style` change can never move the label's face, which is
+exactly what the Python does by passing `font=` to every `Button`.
+
+---
+
+### 9.7 `update(dt)` — exact order (settings.py:719-746)
+
+Everything is on **real dt**. There is no `sdt` in the file, `fx.time_scale()` is never called,
+and the whole body is wrapped in `try/except: pass`. The shell hands every scene the raw frame
+time — `scene.update(dt)` with no scaling anywhere in `Game.update` (main.py:401-412) — so "real
+dt" here is the default, not a choice this scene makes.
+
+1. `dt = clamp(float(dt), 0.0, C.MAX_DT)` — `MAX_DT = 1/20 = 0.05`. The shell already clamped to
+   the same bound (`dt = raw_dt if raw_dt < C.MAX_DT else C.MAX_DT`, main.py:482); the scene
+   clamps again.
+2. `self.t += dt`.
+3. `if intro < 1.0: intro = clamp(intro + dt / 0.32, 0.0, 1.0)` — linear in time; `ease_out_cubic`
+   is applied at *read* time inside `_panel_alpha`, not here.
+4. `flash = max(0.0, flash - dt * 2.0)` → a "setting applied" pulse that lasts **0.5 s**.
+5. `reset_flash = max(0.0, reset_flash - dt * 0.7)` → the "progress erased" pulse lasts
+   **1.429 s**.
+6. `background.update(dt)` if the background exists.
+7. `mouse = game.mouse_pos`; then for each button **in list order**:
+   `was = btn.hovered` → `btn.update(dt, mouse)` → if `btn.hovered and not was`,
+   `audio.play("hover")` → if hovered and `data.startswith("fx:")`, remember its description.
+8. `self.fx_hint = hint` (the **last** hovered fx button in list order wins; overlapping is
+   impossible, so in practice it is "the one under the cursor", and `""` when none).
+9. `self._update_preview(dt)` (§9.8.1).
+
+Easing / timing summary:
+
+| Quantity | Formula | Range / timing |
+|---|---|---|
+| `intro` | `+= dt / 0.32`, clamped 0..1 | saturates 0.32 s after entry |
+| panel alpha | `full * (0.45 + 0.55 * ease_out_cubic(intro))` | 45 %→100 % of 214 (rows) / 216 (preview) |
+| `ease_out_cubic(t)` | `1 + (t - 1)^3` | `easeOutCubic` (`core/mathx.ts:53`) |
+| `flash` | `-= dt * 2.0` | 1 → 0 in 0.50 s; drives the four preview values' whiteness |
+| `reset_flash` | `-= dt * 0.7` | 1 → 0 in 1.43 s; drives the progress summary green |
+| header shimmer | `_mix(A, W, 0.3 + 0.2*pulse(t, 1.6))` | period 3.93 s |
+| confirm-row glow | `0.35 + 0.25*pulse(t, 4.0)` | period 1.571 s |
+| confirm-row text | `_mix(UI_BAD, W, 0.35 + 0.35*pulse(t, 6.0))` | period 1.047 s |
+| sound meter | `3 + 14*pulse(t*5 + 0.7i, 1.0)` | period 1.257 s per bar, 0.7 rad phase step |
+| button hover / press | `Button.update`: `1 - exp(-13 dt)` / `1 - exp(-22 dt)`, `flash -= 3.2 dt`, `cool -= dt`; dt re-clamped to 0.1 | owned by ui.md |
+
+**Assert it:** with `post.fx.timeScale()` pinned at 0.05 the panels must still reach full opacity
+in 0.32 s and the preview snake must still crawl at 132 px/s (integration.md §10, real-dt rule).
+
+---
+
+### 9.8 The live preview
+
+#### 9.8.1 `_update_preview(dt)` (settings.py:780-812)
+
+Runs last in `update`, and returns immediately if `_snake is None`.
+
+1. `_orbit += dt`.
+2. `tx, ty = _orbit_target(_orbit)`; `snake.set_target(tx, ty)`; `snake.update(dt)`.
+   `_orbit_target(phase)` (773-778) is a lazy Lissajous figure in **well-local** coordinates:
+   ```
+   rx = 336*0.5 - 72 = 96.0        ry = 300*0.5 - 64 = 86.0
+   tx = 168.0 + cos(phase * 0.85) * 96.0
+   ty = 150.0 + sin(phase * 1.31) * 86.0
+   ```
+   The frequency ratio 0.85 : 1.31 is irrational-ish, so the path never exactly repeats.
+3. Escape guard: `hx, hy = snake.head_pos()`; if **not** `(-40 < hx < 376 and -40 < hy < 340)`,
+   `snake.reset(168.0, 150.0, 0.0)`; if that throws, `_snake = None` and return.
+4. Demo shake, **only while the SHAKE switch is on**: `_shake_next -= dt`; at `<= 0` reset it to
+   `2.3` and set `_shake = 1.0`.
+5. `_shake = max(0.0, _shake - dt * 2.4)` — **outside** the `if`, so a running knock still decays
+   after the switch is turned off.
+6. `_grain_at += dt`; at `>= 1/18` (0.0556 s) reset `_grain_at` and, **if `_grain` is non-empty**
+   (settings.py:811), advance `_grain_index = (_grain_index + 1) % len(_grain)`. This is outside
+   the GRAIN flag test, so the noise phase keeps cycling at 18 fps whether or not GRAIN is on —
+   but `_grain` is built lazily by the first *draw* with GRAIN on (`_grain_surfaces`, 1136-1155),
+   so until then the index sits at 0 and `_grain_at` still resets every 0.0556 s.
+
+The preview snake is a real `core.snake.Snake`: same steering, banking and path integration as
+the game, at `speed = 132` and `length = 11`. It has no boost, no multipliers, no collision.
+
+#### 9.8.2 `_draw_well` (settings.py:1019-1083) — the miniature post chain
+
+Order, top of list painted first:
+
+| Step | Operation | Detail |
+|---|---|---|
+| 1 | rounded rect over `_WELL` | fill `P.shade(BG, 0.9)`, `border_radius=8`. **Always drawn**, even when the buffer is missing |
+| 2 | early out | if `_buf is None or _snake is None`: 1 px outline `P.shade(G, 1.0)`, r8, then return |
+| 3 | `buf.fill(P.shade(BG, 1.05))` | the 336x300 opaque scratch surface |
+| 4 | grid lines | vertical at `x = 0, 30, … 330` (12), horizontal at `y = 0, 30, … 270` (10), colour `P.shade(G, 0.55)`, 1 px |
+| 5 | `draw_snake(buf, snake, theme, t)` | the real renderer, in well-local coordinates, inside its own `try` |
+| 6 | bloom, **if on** | `_apply_bloom` — see below |
+| 7 | scanlines, **if on** | `buf.blit(_scanline_surface(), (0, 0))` — normal alpha |
+| 8 | grain, **if on** | `buf.blit(_grain[_grain_index % len(_grain)], (0, 0))` |
+| 9 | present with the knock | if `_shake > 0.01`: `amp = 7.0 * _shake²`, `ox = int(sin(t*47.0) * amp)`, `oy = int(cos(t*39.0) * amp * 0.8)`; clip to `_WELL ∩ previous clip`; `blit(buf, (888 + ox, 140 + oy))`; restore clip in a `finally` |
+| 10 | outline | 1 px `P.shade(G, 1.2)`, r8, over the **unshaken** `_WELL` |
+
+`_apply_bloom` (1085-1113): small size `(336//6, 300//6) = (56, 50)`; both scratch surfaces are
+allocated once and re-used; `stale = (_bloom_tick % 2) == 0` then `_bloom_tick += 1`, so the blur
+is rebuilt on alternate frames and re-used in between (it reads as bloom persistence). When
+stale: `smoothscale(buf → small)`, `small.fill((150,150,150), BLEND_RGB_MULT)`,
+`smoothscale(small → full)`. Every frame: `buf.blit(full, (0,0), BLEND_RGB_ADD)`.
+
+`_scanline_surface` (1123-1134): a cached 336x300 `SRCALPHA` surface with a 1 px line of
+`(0, 0, 0, 70)` at `y = 0, 3, … 297` — **100 lines**.
+
+`_grain_surfaces` (1136-1155): four frames. Small size `(336//3, 300//3) = (112, 100)`;
+`dots = max(16, 112*100 // 7) = 1600` per frame; each dot is
+`(v, v, v, a)` with `v = rng.randint(90, 190)` and `a = rng.randint(18, 46)` at
+`(rng.randrange(112), rng.randrange(100))`; then `pygame.transform.scale` (nearest, **not**
+smooth) to 336x300, so the noise is 3x3 blocky. RNG = `random.Random(0x5E77)` (= 24183).
+
+#### 9.8.3 Porting the well to Pixi
+
+Scene-graph shape (all coordinates well-local unless stated):
+
+```
+wellStatic   Graphics  rounded rect (888,140,336,300) r8, shade(BG, 0.9)      <- step 1, never moves
+wellClip     Container mask = Graphics rounded rect at the same rect          <- step 9's clip
+  wellShift  Container position = (888 + ox, 140 + oy)                        <- step 9's offset
+    bgFill   Graphics  336x300, shade(BG, 1.05)                               <- step 3
+    grid     Graphics  22 lines, shade(G, 0.55)                               <- step 4, baked once
+    snakeView SnakeRenderer.container                                         <- step 5
+    scanlines Sprite   baked 336x300 texture, normal alpha, visible = flag    <- step 7
+    grain     Sprite   one of 4 baked textures, visible = flag                <- step 8
+wellEdge     Graphics  1 px outline r8, shade(G, 1.2)                         <- step 10, never moves
+```
+
+`wellStatic` **must sit outside `wellShift`** — Python blits an opaque buffer at an offset inside
+a clip, so the strip the knock uncovers shows the step-1 fill, not the panel behind.
+
+**Bloom — two admissible ports, in order of preference:**
+
+1. **Filter.** Put a `BloomFilter` (`web/src/gfx/post/BloomFilter.ts`, already written for the
+   real chain) on `wellShift` with `gain` tuned to match `150/255 = 0.588`, `enabled = flag`.
+   One extra render target at 336x300, no per-frame JS. It will not be pixel-identical to
+   `smoothscale ÷6 → ×150/255 → smoothscale ×6 → additive`, but the graphics decisions doc
+   settles that verification here is perceptual.
+2. **Literal.** `renderer.generateTexture({ target: wellShift, resolution: 1/6 })` into a
+   `Sprite` scaled ×6 with `blendMode = "add"` and `tint` at 0.588, regenerated on alternate
+   frames to reproduce `_BLOOM_EVERY = 2`. This *is* the Python operation but costs a
+   render-texture round trip every other frame — on mobile that is the wrong trade for a
+   336x300 decoration.
+
+**Scanlines** port literally: one baked `Texture` (100 rows of `rgba(0,0,0,70)`), one `Sprite`,
+normal alpha.
+
+**Grain**: bake four 112x100 noise textures with `scaleMode: "nearest"` and set
+`sprite.width/height = 336/300`; cycle at 18 fps from `grainAt`. Byte-exact parity with Python's
+Mersenne stream is impossible (`web/src/gfx/rng.ts` is not MT) and does not matter — the Python
+itself re-rolls the frames on every entry (§9.3 note 2).
+
+**Knock**: `wellShift.position.set(888 + ox, 140 + oy)` with `Math.trunc` on both, matching
+Python's `int()` truncation-toward-zero (**not** `Math.floor` — the offsets go negative).
+
+---
+
+### 9.9 `draw()` — layer order (settings.py:817-849)
+
+`draw` saves `surface.get_clip()`, calls `_draw_impl`, and restores the clip in a `finally`
+(settings.py:817-828). The scene sets a clip only inside `_draw_well`, and restores it twice
+over. In Pixi there is no ambient clip: give `wellClip` a mask and nothing else.
+
+`_draw_impl` order, top of list painted first:
+
+| # | Layer | Extent |
+|---|---|---|
+| 1 | `background.draw(surface)`, **or** `surface.fill(theme.bg_bottom)` when the background failed to build | design box in Python — see below |
+| 2 | header (rows 1-3) | |
+| 3 | display row (rows 4-7) | |
+| 4 | difficulty row (rows 11-13, 18-24) | |
+| 5 | sound row (rows 25-27, meter 28-36) | |
+| 6 | fx row (rows 38-40) | |
+| 7 | reset row (rows 45-48 or 45'-48') | |
+| 8 | preview: panel, `PREVIEW`, the well, the hint lines, the four summary rows (50-61) | |
+| 9 | **every button in `self.buttons` order**, `btn.draw(surface, theme, fonts, self.t)` | display ×3, difficulty ×4, sound ×1, fx ×4, reset ×1 or ×2, BACK |
+
+The buttons are painted **last, over everything**, including the colour bars under the
+difficulty chips (which is why the bars sit 5 px *below* each chip's bottom rather than behind
+it). The time argument is the scene clock `self.t`, not `game.time`.
+
+**Background style and extent.** `_ensure_background` calls
+`make_background(theme.bg_style, theme, Rect(0, 0, 1280, 720))` (settings.py:307-308) — the
+**whole design box**, not the arena rect the gameplay scene uses. `theme = theme_for_level(
+game.level_index)`, so the settings screen wears the theme of whatever level you were last on;
+entering from the main menu at boot gives theme 0, `grid`.
+**Port:** build it over `game.viewport.overscan` and rebuild in `onResize`, exactly as
+`GameplayScene.rebuildBackground` does (`GameplayScene.ts:195-215`; the `makeBackground` call is
+201-207, and `onResize` at 188-193 guards the rebuild on `this.entered`) — background is the one
+layer allowed past the design box. `makeBackground` takes a fourth argument the Python has no
+counterpart for, `game.app.renderer`. Every other element in this scene stays inside 1280x720.
+
+---
+
+### 9.10 Input and transitions
+
+`handle_event` (settings.py:462-480) is: buttons first
+(`for btn in list(self.buttons): if btn.handle_event(event): self._activate(btn.data); return`),
+then `KEYDOWN`. Everything is inside `try/except: pass`.
+
+#### 9.10.1 Bindings
+
+| Binding | Edge / held | Action key | Line |
+|---|---|---|---|
+| left click completing inside any button | edge (press **and** release inside, `Button.handle_event` ui.py:469-490, debounced by `C.UI_CLICK_COOLDOWN = 0.10`) | that button's `data` | 464-467 |
+| `Esc`, `Backspace` | edge | `"reset_cancel"` when `confirming`, else `"back"` | 471-472 |
+| `Left`, `A` | edge | `"display_prev"` | 473-474 |
+| `Right`, `D` | edge | `"display_next"` | 475-476 |
+| `M` | edge | `"sound"` | 477-478 |
+| mouse motion | continuous, via `Button.handle_event(MOUSEMOTION)` and `Button.update(dt, mouse)` | hover only | ui.py:473-474 |
+
+Nothing is held. There is **no** `Enter`, `Space`, `Tab`, `Up`/`Down`, or `S`/`R` binding.
+
+#### 9.10.2 The keyboard navigation model: there isn't one
+
+This is the finding that matters most for the port. `SettingsScene` has **no focus index, no
+focus ring, no wrap, and no activate key**. The complete keyboard surface is the five bindings
+above. Consequences, all verifiable from the source:
+
+* **Difficulty is mouse-only.** No key selects a chip. The four `diff:` actions are reachable
+  only by clicking.
+* **The four visual-effect switches are mouse-only.**
+* **RESET PROGRESS is mouse-only** to *arm*; `Esc` can cancel the confirm step but no key can
+  confirm it. (That asymmetry is defensible — a destructive action should not have a stray-key
+  path — and should be preserved.)
+* `Left`/`Right`/`A`/`D` are hard-wired to the display-mode cycle, **not** to a focused control.
+  They fire regardless of what the cursor is over.
+* `M` toggles sound from anywhere, matching `PauseScene`'s `M` (§4.8).
+* `Esc`'s meaning is state-dependent: it cancels the confirm step if one is armed, otherwise it
+  leaves the scene. It is the only key that can back out.
+
+**Port recommendation:** ship parity first (the five bindings), then treat "add a real focus
+model" as a separate, cross-scene task — §9.17 Q3. It is not a settings-scene decision: the menu,
+mode-select, level-select and pause screens all have their own ad-hoc keyboard schemes and the
+document's status note already flags focus arbitration as unconsolidated. Whatever is chosen must
+land in all of them at once or the game will have five different keyboard idioms.
+
+Key names for `game.keyEvents` (`UiKeyEvent.key` is the raw `KeyboardEvent.key`):
+`"Escape"`, `"Backspace"`, `"ArrowLeft"`, `"ArrowRight"`, `"a"`, `"d"`, `"m"`. Match
+case-insensitively (a user with CapsLock on sends `"A"`), and skip `ev.repeat` — pygame's
+`KEYDOWN` does not auto-repeat unless `set_repeat` is called, and it is not.
+
+#### 9.10.3 `_activate(key)` (settings.py:482-512)
+
+Total dispatch, every branch inside one `try/except: pass` ("a settings screen must never take
+the game down with it"). Empty key → no-op.
+
+| key | Handler |
+|---|---|
+| `back` | `_go_back()` |
+| `display_prev` / `display_next` | `_cycle_display(∓1)` |
+| `diff:<k>` | `_set_difficulty(k)` |
+| `sound` | `_toggle_sound()` |
+| `fx:<f>` | `_toggle_fx(f)` |
+| `reset` | `play("click")`, `confirming = True`, `_build_buttons()` |
+| `reset_cancel` | **if `confirming`**: `play("click")`, `confirming = False`, `_build_buttons()` |
+| `reset_confirm` | `_do_reset()` |
+
+Unlike `PauseScene._closing`, `_leaving` guards **only** `_go_back` (settings.py:529-531); every
+other control still responds while a switch is in flight. The scene is torn down the same frame,
+so this is moot in practice.
+
+#### 9.10.4 Transition table
+
+| Trigger | Audio | Verb | Target | Args | `game.*` written | `SaveData` written |
+|---|---|---|---|---|---|---|
+| BACK button, or `Esc` / `Backspace` while not confirming | `click` | **`pop_scene()`** when `isinstance(game._stack, list) and len(stack) > 1 and stack[-1] is self`; otherwise `switch_scene(back_target)` | `back_target` (default `menu`) | `level_index=int(game.level_index)` **only** when `back_target == C.SCENE_GAME` | none | `save.save()` before the transition |
+| …and if that `switch_scene` throws | — | `_leaving = False`, then `switch_scene(C.SCENE_MENU)` | `menu` | — | none | — |
+| `Esc` / `Backspace` while confirming | `click` | none — cancels the confirm step | — | — | none | none |
+
+Every other control stays in the scene. The complete set of writes, so the table above is not
+the only place to look:
+
+| Trigger | Audio | Verb | `game.*` written | `SaveData` written | Line |
+|---|---|---|---|---|---|
+| `<` / `>` / the value chip / `Left` / `Right` / `A` / `D` | `click` | none | *none directly* — `game.display_mode` is written by the shell inside `_apply_display_mode` (main.py:189, 194, 197), reached through `Game.set_display_mode` (201-209) | `set_display_mode(game.display_mode)` then `save.save()` | 564-583 |
+| any difficulty chip (incl. the already-selected one) | `click` | none | **`game.difficulty = diff.key`** | `set_difficulty(diff.key)` then `save.save()` | 585-599 |
+| SOUND button / `M` | `click` **only when unmuting** | none | none (`game.audio.muted` via `toggle_mute`) | `set_muted(muted)` then `save.save()` | 601-620 |
+| any of the four fx switches | `click` | none | none — writes `game.fx` flags only | **nothing** today: `_persist_flag` finds no setter and returns before the flush (§9.11.4) | 622-667 |
+| RESET PROGRESS (arm) | `click` | none | none | none | 499-502 |
+| CANCEL | `click` | none | none | none | 503-507 |
+| CONFIRM | `die` | none | **`game.level_index = 0`** | `reset()`, then `set_display_mode` / `set_difficulty` / `set_muted` / `set_mode`, then `save.save()` | 669-714 |
+
+`game.mode` is **read** by `_do_reset` (683) to write it back after the wipe, and never assigned.
+`game.last_result` is neither read nor written anywhere in the file.
+
+`_go_back` (settings.py:520-555) in order: guard on `_leaving` → `_leaving = True` →
+`play("click")` → `save.save()` → the stack test → the switch. **The pop path is what makes the
+pause overlay work**: opened from pause the stack is `[game, pause, settings]`, so BACK pops and
+uncovers the frozen pause overlay rather than switching to `pause` and destroying the run.
+Opened from the menu the stack is `[settings]`, `len == 1`, so it switches.
+
+`_leaving` is reset only by `on_exit` — both `pop_scene` and `switch_scene` call it, so the flag
+always clears. The one path that leaves it set is the exception branch, which resets it
+explicitly before the fallback switch.
+
+**`_flush_save()` is `save.save()`, not `save.flush()`.** The TS `SaveData` has both: `save()`
+writes unconditionally and clears `_dirty` (save.ts:640-652), `flush()` early-returns when
+nothing is dirty (save.ts:655-658). Python only has the unconditional one, so a click on the
+already-selected difficulty chip — where `set_difficulty` finds no change and never sets the
+dirty flag — still rewrites the file. Use `save.save()` to match; `flush()` would silently skip
+that write.
+
+**`game.mode` and `game.last_result` are never written by this scene.** `game.difficulty` is
+written only by `_set_difficulty` (590, §9.11.2) and `game.level_index` only by `_do_reset`
+(704, §9.11.5); `_go_back` *reads* `game.level_index` to build the `switch_scene` argument (547)
+and writes nothing.
+
+---
+
+### 9.11 Every setting, tabulated
+
+`SaveData` field names below are given as **Python / TypeScript**. Cross-checked against
+`snake/core/save.py:299-322` and `web/src/core/save.ts:411-465`.
+
+| # | Label | Type | Save field (py / ts) | Default | Allowed values / step | Effect | Widget | Persisted? |
+|---|---|---|---|---|---|---|---|---|
+| 1 | DISPLAY MODE | **cycle** | `display_mode` / `displayMode` | `"windowed"` | `("windowed", "borderless", "fullscreen")`, step ±1 with wrap (`(i + delta) % 3`) | **immediate** | 3 `Button`s: `<` ghost 44x44, value primary 166x44, `>` ghost 44x44 | yes, flushed on change |
+| 2 | DIFFICULTY | **cycle / radio** | `difficulty` / `difficulty` | `"normal"` | `easy, normal, hard, expert` — direct pick, no stepping | **immediate** for `game.difficulty`; a *run in progress* is unaffected (see below) | 4 chip `Button`s 182x50 + a 166x3 colour bar under each | yes, flushed on change |
+| 3 | SOUND | **toggle** | `muted` / `muted` (inverted: label ON ⇔ `muted == False`) | `False` (sound on) | on / off | **immediate** | 1 `Button` 166x44 + a 9-bar decorative meter | yes, flushed on change |
+| 4 | BLOOM | **toggle** | **none** | on (`EffectStack.bloom_enabled` defaults `True`) | on / off | **immediate** | `Button` 182x42 | **no** — session only |
+| 5 | SCANLINES | **toggle** | **none** | on | on / off | **immediate** | `Button` 182x42 | **no** |
+| 6 | GRAIN | **toggle** | **none** | on | on / off | **immediate** | `Button` 182x42 | **no** |
+| 7 | SHAKE | **toggle** | **none** | on (`fx.shake_enabled` defaults `True`) | on / off | **immediate** | `Button` 182x42 | **no** |
+| 8 | RESET PROGRESS | **action** | writes many; see §9.11.5 | — | — | **immediate**, behind a confirm step | `danger Button` 230x46 → CONFIRM 168x46 + CANCEL 150x46 | yes, flushed |
+
+**There are no sliders in this scene.** No master volume, no music/SFX split, no brightness, no
+sensitivity. `Audio.setMasterVolume` exists on both engines (`core/audio.py:666`, `Audio.ts:382`)
+and is never called from here. Do not invent one; if the web build wants a volume slider that is
+a new feature, not a port.
+
+**And no bars.** The nine-segment sound meter is nine raw `pygame.draw.rect` calls
+(settings.py:937-939), not a `draw_bar`; nothing in this scene calls `draw_bar`, `draw_hud` or
+`draw_cursor`. `web/src/ui/bar.ts` and `web/src/ui/hud/` are unused here — the meter is nine
+`Graphics` rects (or one `Graphics` redrawn per frame, since all nine heights change together).
+
+**Difficulty and a run in progress.** `game.difficulty` is written the instant a chip is clicked,
+but `GameplayScene.on_enter` re-resolves it on **every entry** (gameplay.py:417-420, and the
+comment there says so explicitly), and the TS `GameplayWorld` snapshots it once per entry, in
+`enter(args)` rather than in its constructor (`GameplayWorld.ts:265, 271-272`). So changing
+difficulty from the pause overlay lands on the *next* run, never mid-run. That is intended and
+both ports already agree.
+
+#### 9.11.1 Display mode — `_cycle_display(delta)` (settings.py:564-583)
+
+```
+modes  = list(C.DISPLAY_MODES) or [C.DISPLAY_WINDOWED]
+index  = modes.index(current)              # ValueError -> 0
+chosen = modes[(index + delta) % len(modes)]
+play("click")
+game.set_display_mode(chosen)              # each call in its own try/except
+game.save.set_display_mode(game.display_mode)   # note: re-reads the *actual* mode
+_flush_save(); flash = 1.0; _refresh_labels()
+```
+
+The save is written from `game.display_mode` **after** the shell applied it, not from `chosen` —
+so if `pygame.display.set_mode` fell back to windowed (main.py:189-197) the save records the
+fallback, not the request. Preserve that ordering.
+
+`Game.set_display_mode` (main.py:201-209) is a no-op when the mode is unchanged, rebuilds the
+display surface via `_apply_display_mode`, remembers the windowed size so returning from
+fullscreen restores it, rebuilds the viewport — and then writes `self.save.display_mode`
+**directly as an attribute**, bypassing the setter, so it does *not* mark the save dirty. That is
+why the scene calls `save.set_display_mode` as well; without it the change would never reach
+disk. Keep both calls.
+
+**⛔ The web has no equivalent, and this is the section's biggest port decision.**
+`web/src/core/config.ts` exports no `DISPLAY_MODES` / `DISPLAY_MODE_LABELS` /
+`DEFAULT_DISPLAY_MODE` (they are present in `web/src/data/config.json` — `DISPLAY_MODES`,
+`DISPLAY_MODE_LABELS`, `DEFAULT_DISPLAY_MODE`, `DISPLAY_WINDOWED/BORDERLESS/FULLSCREEN` — the
+exporter emits them, the TS binding just never reads them). `web/src/core/save.ts:92-101`
+hard-codes the same tuple with a docstring saying "there is no windowed/fullscreen distinction in
+a browser; the field exists so a saved document round-trips between the two builds". And there is
+**no fullscreen code anywhere in `web/src/`** — a grep for `requestFullscreen`, `fullscreen` and
+`F11` across `web/src/` and `web/index.html` returns only the save/config data above.
+
+Three ways forward, in order of preference:
+
+1. **Two states, honest labels.** Keep the row, cycle over `["windowed", "fullscreen"]`, drive it
+   with `document.documentElement.requestFullscreen()` / `document.exitFullscreen()` plus a
+   `fullscreenchange` listener that writes the value back (the user can leave fullscreen with the
+   browser's own `Esc`, so the shell must be the source of truth, not the scene). Persist to
+   `save.displayMode`, which already accepts both strings. `borderless` becomes unreachable but
+   still round-trips from a desktop profile. The `"F11  FULLSCREEN"` hint stays true — browsers
+   bind F11 themselves.
+2. **Three states, `borderless` aliased to fullscreen.** Round-trips a desktop save perfectly and
+   keeps the arrow-cycle at 3 stops, at the cost of two labels that do the same thing. Choose
+   this only if the Electron wrapper (task 7) lands first, where all three *are* distinguishable.
+3. **Hide the row on the web.** Rejected: it silently drops one of five documented rows and
+   leaves the layout with a 100 px hole at y = 96.
+
+Whichever is chosen, the shell needs a `Game.setDisplayMode(mode)` (and a `game.displayMode`
+field) so the scene's call site stays a one-liner and the Electron/Capacitor wrappers can
+override the effector rather than the scene.
+
+#### 9.11.2 Difficulty — `_set_difficulty(key)` (settings.py:585-599)
+
+```
+diff = get_difficulty(key)     # total; an unknown key returns the default
+play("click")
+game.difficulty = diff.key
+game.save.set_difficulty(diff.key)
+_flush_save(); flash = 1.0; _refresh_labels()
+```
+Clicking the **already-selected** chip is not a no-op: it still plays the cue, still writes,
+still flushes and still sets `flash = 1.0`. The comment (585) says that is deliberate — "a no-op
+click on the current one still confirms". `SaveData.set_difficulty` itself skips the dirty flag
+when the value is unchanged (save.py:754-759 / save.ts:871), so the flush is cheap.
+
+#### 9.11.3 Sound — `_toggle_sound()` (settings.py:601-620)
+
+```
+muted = self._muted()                       # bool(game.audio.muted), False on error
+try:    muted = bool(game.audio.toggle_mute())
+except: muted = not muted; try: game.audio.muted = muted
+game.save.set_muted(muted); _flush_save()
+if not muted: play("click")                 # audible confirmation only when unmuting
+flash = 1.0; _refresh_labels()
+```
+
+The cue ordering is the subtlety: `click` is played **after** the toggle and **only when
+unmuting**, so muting is silent and unmuting announces itself. Identical to `PauseScene`'s SOUND
+button (§4.9) — and note that in the pause-over-settings stack, `PauseScene._sync_sound_label`
+re-reads `game.audio.muted` every frame precisely so this scene can flip it from on top
+(pause.py:301-304).
+
+**TS engine calls, exactly:**
+
+| Control | Python | TypeScript | Source |
+|---|---|---|---|
+| read current state | `game.audio.muted` | `audio.muted` (public field) | `Audio.ts:173` |
+| the toggle | `game.audio.toggle_mute()` → new muted | `audio.toggleMute(): boolean` → new muted | `Audio.ts:377-380` |
+| the fallback write | `game.audio.muted = muted` | `audio.setMuted(v)` (also calls `stopAll()` when muting) | `Audio.ts:371-374` |
+| every cue | `game.audio.play(name)` | `audio.play(name, volume = 1.0)` | `Audio.ts:318` |
+
+`Audio.setMuted` stops every live voice when muting; Python's does the same
+(`core/audio.py:656-659`). No volume method is reached from this scene.
+
+#### 9.11.4 Visual effects — `_toggle_fx(flag)` (settings.py:622-643) and the persistence probe
+
+Read path (`_fx_flag`, settings.py:332-344) maps the action key to an attribute on `game.fx`:
+
+| key | Python attribute | TS field | Default |
+|---|---|---|---|
+| `bloom` | `fx.bloom_enabled` | `ScreenFx.bloomEnabled` (`ScreenFx.ts:252`) | `True` |
+| `scanlines` | `fx.scanlines_enabled` | `ScreenFx.scanlinesEnabled` (`ScreenFx.ts:249`) | `True` |
+| `grain` | `fx.grain_enabled` | `ScreenFx.grainEnabled` (`ScreenFx.ts:253`) | `True` |
+| `shake` | `fx.shake_enabled` | `ScreenFx.shakeEnabled` (`ScreenFx.ts:204`) | `True` |
+
+Missing `fx` → `False` for every flag; an unknown key → `False`.
+
+Write path:
+
+| key | Python | TypeScript |
+|---|---|---|
+| `bloom` | `fx.set_post_flags(bloom=value)` | `game.post.fx.setPostFlags({ bloom: value })` (`ScreenFx.ts:579-594`) |
+| `scanlines` | `fx.set_post_flags(scanlines=value)` | `setPostFlags({ scanlines: value })` |
+| `grain` | `fx.set_post_flags(grain=value)` | `setPostFlags({ grain: value })` |
+| `shake` | `_install_shake_guard(fx)` then `fx.shake_enabled = value` | `game.post.fx.shakeEnabled = value` |
+
+then `_persist_flag(flag, value)`, `flash = 1.0`, `_refresh_labels()`. `play("click")` fires
+before the write, for all four.
+
+**The shake guard does not need porting.** `_install_shake_guard` (settings.py:172-198)
+monkey-patches `fx.shake` with an idempotent wrapper that drops the call while
+`fx.shake_enabled` is False, because `EffectStack.set_post_flags` has no switch for camera shake
+(shake is simulation feedback, not a post-processing layer). The TS `ScreenFx` already checks the
+flag as its first statement — `shake(amount, opts) { if (!this.shakeEnabled) return; … }`
+(`ScreenFx.ts:281-282`), and the field's own comment records exactly this decision: "Python
+monkeypatches a guard around `fx.shake`; here it is a first-class flag" (`ScreenFx.ts:199-204`).
+So the port is
+`game.post.fx.shakeEnabled = value` and nothing else. **Delete `_install_shake_guard` from the
+port**; also drop the `on_enter` guard-install step (settings.py:267-269), which exists only to
+arm it.
+
+**How the toggles reach the picture in TS.** `PostChain.update(dt)` re-reads the flags every
+frame — `bloom.enabled = fx.bloomEnabled && fx.bloomStrength > 0` (`PostChain.ts:252-255`),
+`crt.setLayers(fx.vignetteEnabled, fx.curvatureEnabled, fx.scanlinesEnabled)`
+(`PostChain.ts:281-284`), `grain.enabled = fx.grainEnabled && …` (`PostChain.ts:288-292`) — so a
+toggle takes effect on the very next frame with no rebuild and no filter re-allocation. Note that
+the TS `CrtFilter` bundles vignette + curvature + scanlines behind one `enabled`, and
+`setLayers` switches the scanline layer individually; toggling scanlines here correctly leaves
+the vignette and curvature alone.
+
+**Persistence: `_persist_flag` (settings.py:645-667) is a duck-typed probe, and today it is a
+no-op on both sides.**
+```
+setter = getattr(save, "set_" + flag, None) or getattr(save, "set_effect", None)
+if not callable(setter): return
+setter(bool(value))              if it was the per-flag setter
+setter(flag, bool(value))        if it was set_effect
+_flush_save()
+```
+
+**The per-flag branch is dead code**, and this matters if you port the probe literally. The test
+is `getattr(save, "set_" + flag, None) is setter` (settings.py:661) — an identity test on two
+separately-fetched **bound methods**, which CPython builds fresh on every attribute access, so it
+is `False` even when `set_bloom` does exist (`s.f is s.f` → `False`; `==` would have been `True`).
+The `else` branch then calls the one-argument setter with two arguments, `TypeError` is swallowed
+by `except Exception: return`, and `_flush_save()` never runs. Only the `set_effect(flag, value)`
+shape can ever work. In TS the same expression would be `true` — methods live on the prototype and
+`save.setBloom === save.setBloom` — so a literal port would silently behave *differently*. Don't
+port the probe: call `save.setEffect(flag, value); save.save();` directly.
+
+Neither `snake/core/save.py` nor `web/src/core/save.ts` defines `set_bloom` / `set_scanlines` /
+`set_grain` / `set_shake` / `set_effect` / `setEffect`, and the `SaveDocument` interface
+(`save.ts:124-140`) has no effects key. **So all four switches are session-only and reset to ON
+on every reload, in both builds.** The docstring says so and calls it deliberate.
+
+**Recommendation (an addition beyond parity, flagged as such).** On mobile — which is the whole
+point of this port — turning bloom off is the single largest frame-rate lever the player has, and
+losing it on every reload is a real regression in feel. The Python has left the hook in place
+precisely so the save schema can grow into it. Concretely, in `web/src/core/save.ts`:
+
+* add `effects: Record<string, boolean>` to `SaveDocument` (`save.ts:124-140`) and to the class
+  (`save.ts:411-465`), defaulting to `{}` (absent means on);
+* add `setEffect(flag: string, value: boolean): void` beside `setMuted` (`save.ts:849`),
+  validating `flag` against a `["bloom","scanlines","grain","shake"]` whitelist and setting
+  `_dirty` only on a change;
+* read it in `apply()` with the usual `pick(raw, "effects", "effects")` tolerance, dump it in
+  `toDict()`, and **clear it in `reset()`** or not — pick one and say so; `reset()` currently
+  keeps `muted` (save.py:815-837, save.ts:946-962) so keeping `effects` is the consistent choice;
+* the scene's call site is then `save.setEffect(flag, value); save.save();` — **not** the
+  duck-typed probe, for the identity reason above.
+
+Do **not** bump `SCHEMA_VERSION` for this: `apply()` already tolerates unknown/absent keys in
+both directions, so a document with `effects` loads fine in the Python build and vice versa.
+If the Python is ever to pick it up, add `set_effect(flag, value)` to `snake/core/save.py` and
+`_persist_flag` starts working with no scene change at all.
+
+#### 9.11.5 Reset progress — `_do_reset()` (settings.py:669-714)
+
+`SaveData.reset()` clears the whole document, preferences included, but the button is labelled
+RESET *PROGRESS* — so the four settings this screen owns are read first and written straight back:
+
+1. `play("die")` — the only non-`click` cue in the scene.
+2. Snapshot `display = _display_mode()`, `difficulty = _difficulty().key`, `muted = _muted()`,
+   `mode = getattr(game, "mode", None)`.
+3. `game.save.reset()` (in a `try`).
+4. Re-apply, each in its own `try/except: continue`, skipping any `None` value:
+   `set_display_mode(display)`, `set_difficulty(difficulty)`, `set_muted(muted)`,
+   `set_mode(mode if mode in C.GAME_MODES else None)`.
+5. `_flush_save()`.
+6. `game.level_index = 0` — "which now has nowhere above level one to point at".
+7. `confirming = False`, `reset_flash = 1.0`, `flash = 1.0`, `_build_buttons()`.
+8. **No particle burst**, and the source says why (settings.py:712-714): this scene never draws
+   `game.particles`, so spawning into it would only leak emitters into the next screen. The
+   feedback is `reset_flash`, which lights the summary line green for 1.43 s.
+
+What `reset()` wipes (save.py:815-837 ≡ save.ts:946-962): `highscore → 0`, `unlocked → 1`,
+`best → {}`, `stars → {}`, `total_food → 0`, `total_deaths → 0`, `display_mode`/`difficulty`/
+`mode` → defaults, `story_progress → 0`, `story_complete → False`, `seen_beats → []`,
+`best_by_difficulty` / `stars_by_difficulty` → empty tables. It does **not** touch `path`/`key`
+or `muted` — so step 4's `set_muted` is belt-and-braces, and harmless.
+
+**This is not a "reset to default settings" action.** There is no such control anywhere in the
+game: the confirm step erases *progress* and explicitly preserves the four settings. If a
+"restore defaults" affordance is wanted on the web that is a new feature (§9.17 Q4).
+
+**Confirm step, precisely:** `reset` → `play("click")`, `confirming = True`, rebuild →
+the row's title, description and third line change (§9.5.7) and the single danger button is
+replaced by CANCEL + CONFIRM. `reset_cancel` (button or `Esc`/`Backspace`) → `play("click")`,
+`confirming = False`, rebuild. `confirming` is reset to `False` by both `on_enter` **and**
+`on_exit`, so no route can re-enter the scene already armed.
+
+---
+
+### 9.12 Audio cues, fx and particle calls
+
+| Call | Arguments | Trigger | In `web/src/data/audio.json`? |
+|---|---|---|---|
+| `audio.play("click")` | — | display cycle (either direction, incl. the value chip); any difficulty chip; **sound toggle only when it unmutes**; any fx toggle; RESET PROGRESS (arming); CANCEL; BACK / `Esc` / `Backspace` | yes |
+| `audio.play("hover")` | — | any button's hover **rising edge**, once per edge (settings.py:733-737) | yes |
+| `audio.play("die")` | — | CONFIRM, before `save.reset()` (settings.py:679) | yes |
+| `audio.toggle_mute()` | — | SOUND / `M` | n/a (engine call) |
+| `game.save.save()` | — | every setting change and on the way out | n/a |
+
+Cue-name cross-check against `web/src/data/audio.json` `names`
+(`eat, bonus, powerup, hit, die, click, hover, start, levelup, win, boost, portal`): `click`,
+`hover` and `die` are all present. **No unknown cues.** Note the cues this scene does *not* use:
+no `start` (nothing is launched from here), no `levelup`, no `win`.
+
+**No `fx.flash`, no `fx.shake`, no `fx.slowmo`, no `particles.*` — none at all.** The only `fx`
+contact is the four flag writes in §9.11.4. The `fx.begin_transition()` on the way out belongs to
+`switch_scene`, not to this scene (integration.md §2.4); the `pop_scene` path deliberately has no
+transition. The TS `Game.switchScene` already calls `this.post.fx.beginTransition()`
+(`Game.ts:268`) and `popScene` does not — correct on both counts.
+
+**The hover cue almost never fires from mouse movement, and that is intentional.** Python's event
+pump runs before `scene.update`, and `Button.handle_event(MOUSEMOTION)` sets `self.hovered`
+directly (ui.py:473-474). So by the time `update` computes `was = btn.hovered`, a mouse-in has
+already flipped the flag and no edge is seen. The cue therefore fires only when a button appears
+**under a stationary cursor** — i.e. on `_build_buttons`, which is the confirm-step swap, the
+cancel, and the post-reset rebuild. The TS port reproduces this for free **provided the scene
+drains `game.uiEvents` before calling `button.update(...)`**, exactly as `GameplayScene` does
+(`GameplayScene.ts:229-239`) — `ButtonState.handlePointer` sets `hovered` on a `"move"` event
+(`Button.ts:376-379`) and `ButtonState.update` then computes `justEntered = hovered && !was`
+(`Button.ts:405-419`). Drain first, then update, then read `btn.justEntered`; do **not** hand-roll
+the `was` comparison.
+
+---
+
+### 9.13 Data dependencies and what the TS core exposes
+
+| Reads / writes | From | TS equivalent | Status |
+|---|---|---|---|
+| `game.level_index` | shell | `game.levelIndex` (`Game.ts:137`) | ✅ |
+| `game.difficulty` (r/w) | shell | `game.difficulty` (`Game.ts:139`) | ✅ |
+| `game.mode` (read only) | shell | `game.mode` (`Game.ts:138`) | ✅ |
+| `game.display_mode`, `game.set_display_mode(mode)` | shell (main.py:72, 201) | **absent** | ⛔ **G-S1** — see §9.11.1 |
+| `game._stack` (length + identity test) | shell | `stack` is **private** (`Game.ts:144`); `game.scene` gives the top (`Game.ts:250-252`) but there is no depth | ⛔ **G-S2** |
+| `game.pop_scene()` / `switch_scene(name, **kw)` | shell | `popScene()` (`Game.ts:282-289`) / `switchScene(key, args)` (`Game.ts:254-269`) | ✅ — **§4.8's unparent bug is fixed**: `popScene` now calls `this.post.scene.removeChild(s.root)`, matching `pushScene` (`Game.ts:275`), with a comment recording why. Re-verify before porting; do not re-report it |
+| `game.mouse_pos` | shell | `game.pointer.x/.y` (`Game.ts:109-115`) | ✅ |
+| `game.fx` | `EffectStack` on the shell | **`game.post.fx`** (`PostChain.ts:104`); there is no `game.fx` | ⚠ rename only |
+| viewport for the background | n/a (Python authors at 1280x720) | `game.viewport.overscan` (`Viewport.ts:51`) | ✅ |
+| keyboard | pygame events | `game.keyEvents` / `game.keysDown` (`Game.ts:120-126`) | ✅ |
+| `game.fonts` (`h1, small, tiny, h2`, `get(size, bold)`) | `FontBook` | `game.fonts` (`Game.ts:98`), `fonts.h1/.small/.tiny/.h2`, `fonts.get(size, bold)` | ✅ |
+| `game.audio.muted / toggle_mute() / play(name)` | audio engine | `Audio.muted` / `toggleMute()` / `play(name, volume?)` | ✅ ported, **not on `Game`** — see G-S3 |
+| `game.fx.{bloom,scanlines,grain,shake}_enabled`, `set_post_flags` | `EffectStack` | `game.post.fx.{bloomEnabled,scanlinesEnabled,grainEnabled,shakeEnabled}`, `setPostFlags({...})` | ✅ |
+| `game.save.{progress(), total_stars(), max_stars(), highscore}` | `SaveData` | `progress()` (save.ts:745), `totalStars()` (703), `maxStars()` (717), `highscore` (416) | ✅ |
+| `game.save.{set_display_mode, set_difficulty, set_muted, set_mode, reset, save}` | `SaveData` | `setDisplayMode` (862), `setDifficulty` (871), `setMuted` (849), `setMode` (880), `reset` (946), `save` (640) | ✅ |
+| `game.save.set_<flag>` / `set_effect` (probe) | `SaveData` | **absent** | ⛔ **G-S4** — §9.11.4 |
+| `get_difficulty(key)`, `all_difficulties()`, `lives_for(diff)` | `core/difficulty.py` | `getDifficulty` (258), `allDifficulties()` (314), `livesFor` (382) | ✅ |
+| `diff.key / name / blurb / color / speed_mult / score_mult / self_mode` | `Difficulty` | `key / name / blurb / color / speedMult / scoreMult / selfMode` | ✅ |
+| `diff.label` (property) | `Difficulty` | **no property** — module function `label(diff)` (difficulty.ts:329) or `diff.name.toUpperCase()` | ⚠ naming shim |
+| `diff.self_kills` (property) | `Difficulty` | **no property** — `selfCollisionEnabled(diff)` (difficulty.ts:343) or `diff.selfMode !== "off"` | ⚠ naming shim |
+| `C.DISPLAY_MODES / DISPLAY_MODE_LABELS / DEFAULT_DISPLAY_MODE` | `config.py` | **not exported by `core/config.ts`** although present in `data/config.json` | ⛔ **G-S5** |
+| `C.GAME_MODES` | `config.py` | `GAME_MODES` is exported by `core/save.ts:104`, **not** by `core/config.ts` | ⚠ import from `core/save` |
+| `C.WINDOW_W/H, UI_BUTTON_W/H, UI_CORNER, MAX_DT, UI_CLICK_COOLDOWN` | `config.py` | same names, `core/config.ts:54-148` (`UI_CLICK_COOLDOWN` is 148) | ✅ |
+| `C.SCENE_*` (nine names, for `_resolve_back`) | `config.py` | `SCENES` map (`Scene.ts:65-76`) — same ten strings | ✅ |
+| `theme_for_level(i)`, `theme.{accent, accent2, text, text_dim, bg_bottom, grid, bg_style}` | `palette.py` / `themes.json` | `themeForLevel` (palette.ts:334); `accent / accent2 / text / textDim / bgBottom / grid / bgStyle` on `Theme` (palette.ts:146-173) | ✅ |
+| `P.{lerp_color, shade, UI_WHITE, UI_DIM, UI_GOOD, UI_BAD, UI_GOLD}` | `palette.py` | `lerpColor` (36), `shade` (46), `UI_WHITE` (360), `UI_DIM` (362), `UI_GOOD` (364), `UI_BAD` (368), `UI_GOLD` (370) — `core/palette.ts` | ✅ |
+| `clamp, ease_out_cubic, pulse` | `contracts.py` | `clamp` (12), `easeOutCubic` (53), `pulse` (74) — `core/mathx.ts` | ✅ |
+| `_wrap(text, font, max_w)` | local to settings.py | `wrapText(fonts, style, text, width, opts)` (`ui/wrap.ts:43`) — the shared replacement for all five scene-local `_wrap` copies | ✅ do not re-implement |
+| `Snake(x, y, heading, length=)`, `.speed`, `.set_target`, `.update(dt)`, `.head_pos()`, `.reset(x, y, h)` | `core/snake.py` | `new Snake(x, y, heading, length)` (snake.ts:233), `speed` (180), `setTarget` (481), `update` (587), `headPos()` (299), `reset(x, y, heading?, length?)` (548) | ✅ |
+| `make_background(style, theme, rect)` | `gfx/background.py` | `makeBackground(style, theme, rect, renderer)` (`gfx/bg/index.ts:81`) — **takes a `Renderer`** | ✅ (extra arg) |
+| `draw_snake(surface, snake, theme, t)` | `gfx/render.py` | `new SnakeRenderer()` + `.draw(snake, theme, t, opts?)` (`gfx/SnakeRenderer.ts:299,423`) | ✅ |
+| `draw_panel / draw_text / Button` | `gfx/ui.py` | `Panel` (`ui/panel.ts:251`), `Label` (`ui/text.ts:116`), `Button` (`ui/Button.ts:425`) | ✅ |
+
+`levels.json` and `story.json` are **not read at all** by this scene — no `get_level`, no
+`get_beat`, no `get_chapter`. `difficulty.json` is read through `core/difficulty`, and
+`save`/`themes`/`config` as above.
+
+**Gaps, consolidated:**
+
+* **G-S1 — no display-mode effector.** `Game` has no `displayMode` field and no
+  `setDisplayMode`. Decide §9.11.1 first, then add both to `web/src/app/Game.ts` next to
+  `levelIndex / mode / difficulty` so the wrappers can override the effector.
+* **G-S2 — stack depth is not observable.** `_go_back` needs `len(stack) > 1 and stack[-1] is
+  self`. Add `get stackDepth(): number { return this.stack.length; }` to `Game` (or make `stack`
+  a public readonly array); the identity half is already `game.scene === this`. Without it the
+  BACK-from-pause path cannot be written correctly and settings would `switchScene("pause")`,
+  destroying the run underneath.
+* **G-S3 — `Game` still has no `audio` or `save`.** `main.ts:58-60` injects both into
+  `GameplayScene` / `PauseScene` / `MenuScene`'s constructors (`HelpScene` takes `sound` only,
+  main.ts:61). §4.10 flagged this for pause; settings makes it a fourth scene.
+  **Decide now:** either `audio: Audio` and `save: SaveData` on `Game` (matching `game.audio` /
+  `game.save` and integration.md §11), or keep constructor injection everywhere. Do not mix.
+  Injection is the status quo, so `new SettingsScene(g, save, sound)` is the low-friction choice.
+* **G-S4 — no persistence for the four visual-effect switches** (§9.11.4).
+* **G-S5 — `core/config.ts` does not bind the display constants** that `data/config.json`
+  already carries. Add a `strList(key, fallback)` and `strMap(key, fallback)` helper beside the
+  existing `num`/`int`/`bool`/`str` (config.ts:18-40) and export `DISPLAY_MODES`,
+  `DISPLAY_MODE_LABELS`, `DEFAULT_DISPLAY_MODE`, `DISPLAY_WINDOWED/BORDERLESS/FULLSCREEN`.
+  `save.ts:98` can then stop hard-coding its own copy.
+* **The `popScene` unparent bug recorded in §4.8 has since been fixed** — `Game.popScene` now
+  removes from `this.post.scene` (`Game.ts:288`), the same parent `pushScene` adds to
+  (`Game.ts:275`). It was load-bearing for this scene's primary exit path from the pause overlay,
+  so it is worth an assertion (§9.16 item 3), but it is no longer a blocker and §4.8's bullet is
+  stale. Two other §4.10 gaps have also closed since it was written: `UI_CLICK_COOLDOWN` **is**
+  exported (`core/config.ts:148`), and the keyboard/pointer edge queues exist
+  (`game.uiEvents` / `game.keyEvents`, `Game.ts:122-126`).
+
+---
+
+### 9.14 Capture cross-check — `captures/04-settings.png` (1280 x 720)
+
+Level index 0, theme "Neon Grid": `accent = (0, 236, 255)`, `accent2 = (255, 60, 190)`,
+`bg_bottom = (4, 6, 16)`, `grid = (30, 52, 96)`, `bg_style = "grid"`.
+Difficulty NORMAL, sound on, all four effects on, `back_target = "menu"`, not confirming, and the
+cursor is resting on the NORMAL chip.
+
+| On screen | Accounted for by |
+|---|---|
+| "SETTINGS" cyan-white, glyph top ~22, left edge 40 | row 1 (text top 18, display@42, `_mix(accent, W, 0.30..0.50)`) |
+| "everything here is saved…" grey, y ~70 | row 2 (top 64, small 17, `text_dim`) |
+| "BACK RETURNS TO MENU" right-aligned, right edge ~1240, y ~35 | row 3 (top 30, right align, `shade(text_dim, 0.8)` = (105, 116, 140)) |
+| Panel 1 edges x 40..840, y 96..196; magenta "DISPLAY MODE"; grey blurb; cyan "F11  FULLSCREEN" | rows 4-7; `_mix(accent2, W, 0.3)` = **(250, 115, 209)** magenta; `_mix(accent, W, 0.2)` = (48, 238, 255) cyan. `P.clamp8` **truncates** (`int(v)`, palette.py:26-28), it does not round — `web/src/core/palette.ts:29-33` matches with `Math.trunc`, so the ported colours are identical |
+| `<` chip ~536..580, "WINDOWED" chip ~584..750 lit, `>` chip ~754..798, all centred on y 146 | rows 8-10 |
+| Panel 2 edges y 204..376; four chips 58/252/446/640 at y 268..318, NORMAL lit and haloed | rows 11-17 (NORMAL is `primary`, the others `ghost`; the halo is `Button` hover, cursor is on it) |
+| Four coloured underlines at y ~323, green / blue / amber / pink, the blue one brightest | rows 18-21: `diff.color` for NORMAL, `shade(color, 0.35)` for the rest |
+| "The serpent as intended - fair, fast, unforgiving of sloppiness." y ~336 | row 22 (top 330, small 17, `_mix(text, (96,202,255), 0.45)` = (174, 225, 255)) |
+| "3 LIVES   1.00x SPEED   SELF-COLLISION FORGIVING" y ~359 | row 23 (top 353, tiny, `shade(diff.color, 0.9)` = (86, 181, 229)) |
+| "x1.00 SCORE" gold, right edge ~820, same baseline | row 24 (`P.UI_GOLD`) |
+| Panel 3 edges y 384..464; nine short bars ~510..586 rising to a flat baseline ~438; "SOUND  ON" chip 654..820 at y 404..448 | rows 25-37; bar `i` at `x = 510 + 9i`, 5 px wide, top at `438 - h`, `h ∈ [3, 17]`, colour ramping cyan → green with `i/8` |
+| Panel 4 edges y 472..584; four chips "BLOOM  ON" / "SCANLINES  ON" / "GRAIN  ON" / "SHAKE  ON" at 58/252/446/640, y 534..576, all lit | rows 38-44, all four `primary` |
+| Panel 5 edges y 592..688; salmon "RESET PROGRESS" title; "8 / 12 LEVELS CLEARED   17 / 36 STARS   BEST 4,210" y ~660; red-outlined RESET PROGRESS button 590..820, y 623..669 | rows 45-49; the title is `_mix(UI_BAD, W, 0.3)` = **(250, 132, 152)** — visibly warmer than the magenta row titles, confirming the `danger=True` branch. The panel itself is *not* warmer: `danger` never reaches `draw_panel`. `max_stars = LEVEL_COUNT × MAX_STARS = 12 × 3 = 36` (save.py:613-615); the comma in `4,210` is the `{:,}` format |
+| Preview panel 872..1240, y 96..620; magenta "PREVIEW" at ~892, 110 | rows 50-51 |
+| Well 888..1224, y 140..440: dark box, faint 30 px lattice, a bright cyan snake with a bloom halo running down-right | row 52 / §9.8; grid `shade(grid, 0.55)`, snake via `draw_snake` |
+| Two hint lines "Hover a switch to see what it does - the strip above" / "shows it live." at y ~465 and ~483 | row 53: `_PREVIEW_HINT` wrapped at 328 px, 18 px pitch from y 454 |
+| Four label/value pairs DISPLAY→WINDOWED (cyan), DIFFICULTY→NORMAL (blue), SOUND→ON (green), EFFECTS→4 / 4 ON (magenta), left edge 892, right edge 1220, ~26 px apart from y ~522 | rows 54-61; `flash = 0` at rest, so the mix factor is 0.25 |
+| BACK button 850..1150, y 622..680, `primary` | row 62 |
+| "60.0 fps" pale blue-grey, top right | `main.py:435-441`, gated on `C.SHOW_FPS`: `fonts.mono_small.render(f"{fps:5.1f} fps", True, P.UI_DIM)` — `P.UI_DIM` = (132, 146, 176), not white — blitted to the **window** surface at `(screen_w - label_w - 8, 6)` **after** `fx.present` and `_blit_to_window`. So it is outside the design box *and* outside the post chain. Not part of this scene; the web shell has its own readout |
+| Small reticle over the NORMAL chip | shell `draw_cursor` (ui.py:593), drawn onto the canvas before `fx.present` (main.py:428) so it picks up the post chain; TS equivalent `game.cursor` parented into `post.scene` (`Game.ts:192`) |
+| Cyan perspective grid with a horizon and a glow bloom filling the entire 1280x720 frame, brighter behind the header | `make_background("grid", theme, Rect(0,0,1280,720))`, layer 1 |
+
+**Nothing in the capture is unexplained by settings.py plus the shell.** Specifically absent, and
+correctly so: no scroll bar, no tabs, no volume slider, no focus ring on any control, no
+"restore defaults" button, no letterbox band (the capture is exactly 1280x720, so §9.9's overscan
+recommendation is untested here — same open question as §4.2.1).
+
+---
+
+### 9.15 `onEnter` reset checklist for the port
+
+Scene instances are cached and reused. In `onEnter(args)`:
+
+1. `t = 0`, `intro = 0`, `flash = 0`, `resetFlash = 0`, `fxHint = ""`.
+2. `confirming = false`, `leaving = false` — **and again in `onExit`**, both, for the same
+   belt-and-braces reason as `PauseScene._closing` (§4.3).
+3. `backTarget = resolveBack(args?.back)` against the nine-name whitelist, default `"menu"`.
+4. `theme = themeForLevel(game.levelIndex)`; rebuild the background if the **theme object**
+   changed (not the style string — §9.3 note 1), over `viewport.overscan`.
+5. Re-label and re-style every control from live values (`refreshLabels`), and put the reset row
+   in its non-confirming layout. Zero `btn.state` on **every** button, not just the swapped pair
+   (§9.4) — the Python throws the whole list away on entry, so no button can carry a hover or an
+   arm across a re-entry.
+6. Reset the preview: `orbit = 0`, `shake = 0`, `shakeNext = 2.3`, `grainIndex = 0`,
+   `grainAt = 0`, `bloomTick = 0`; `snake.reset(168, 150, 0, 11)` and `snake.speed = 132`
+   (or construct a fresh `Snake` — the Python constructs).
+7. Do **not** rebuild the baked textures (scanlines, grain frames, grid) — the Python does only
+   because its buffer is dropped in `on_exit`; the port should keep them for the process lifetime.
+8. Set `panelAlpha` from `intro = 0` so the first frame draws at 45 % rather than transparent.
+
+### 9.16 Invariants worth asserting
+
+1. With `post.fx.timeScale()` pinned at 0.05, the panels still reach full opacity in 0.32 s and
+   the preview snake still moves at 132 px/s (real-dt rule).
+2. `SettingsScene` never touches `game.particles` and never calls `fx.flash / shake / slowmo`.
+3. BACK from a stack of depth ≥ 2 pops; from depth 1 it switches. Assert both, since the pause
+   route is the one that loses a run if it is wrong.
+4. Every mutating control **that has a save field** — display mode, difficulty, sound, and the
+   reset confirm — leaves `save.dirty === false` immediately afterwards, because each ends in
+   `_flush_save()` → `save.save()`. The **four fx toggles must not**: `_persist_flag` finds no
+   setter and returns before the flush (§9.11.4), so an fx toggle leaves `save.dirty` exactly as
+   it found it. Assert both halves, or a future `setEffect` will land untested.
+5. `resolveBack` maps every string outside the nine-name whitelist — including `"settings"` and
+   `""` — to `"menu"`.
+6. Toggling all four fx switches off and on again returns `post.fx` to its entry state, and the
+   preview reflects each switch within one frame.
+7. Every `"ui"` face this scene asks for is **bold**: `get(17, true)` must not resolve to
+   `fonts.small` and `get(21, true)` must not resolve to `fonts.body` (§9.5.10).
+8. `_build_buttons` produces 14 buttons when `confirming` is false and 15 when it is true, and
+   the BACK rect is `(850, 622, 300, 58)` in both.
+
+### 9.17 Open questions
+
+* **Q1.** Display mode on the web — two states via the Fullscreen API, three with `borderless`
+  aliased, or something else? Blocks the whole row and `Game.setDisplayMode` (§9.11.1). This is a
+  product decision, not a transcription one.
+* **Q2.** Should the four visual-effect switches persist (§9.11.4)? Recommendation: yes, via a
+  new `effects` map and `SaveData.setEffect`, since bloom is the biggest mobile frame-rate lever.
+  Needs sign-off because it adds a field the Python does not write.
+* **Q3.** No scene in the game has a keyboard focus model, and this one is the most
+  keyboard-hostile (difficulty, the four fx switches and the reset arm are all mouse-only). Add a
+  shared focus idiom across all nine scenes, or ship parity? Whichever, it must be decided once,
+  cross-scene — the status note at the top of this document already lists focus arbitration as
+  unconsolidated.
+* **Q4.** There is no "restore default settings" control anywhere in the game; RESET PROGRESS
+  explicitly preserves settings. Add one for the web build, or keep parity?
+* **Q5.** Overscan: should the preview well, the row panels or only the background extend past
+  the 1280x720 design box on a 21:9 screen? Recommendation matches §4.2.1 — background to
+  overscan, all chrome inside the design box — but it is untested against a wide capture.
+* **Q6.** Bloom in the preview well: `BloomFilter` on the container (preferred) or a literal
+  1/6-resolution render-texture round trip every other frame? Decide before writing the well, as
+  it changes the sub-tree shape.
+* **Q7.** On mobile there is no hover, so `fx_hint` is always `""` and the preview's hint line
+  never changes from `_PREVIEW_HINT` — which reads "Hover a switch to see what it does". Show the
+  description on press instead, reword the fallback for touch, or leave it? Touch also makes
+  `ButtonState.update`'s `pointer.touch && !armed → hovered = false` rule (Button.ts:412-414)
+  suppress the hover cue entirely here.
+## 10. The story scene (`StoryScene`)
+
+Ground truth: `E:/SnakeGame/snake/scenes/story_scene.py`, lines 1-1155 (the whole file).
+Reference captures: `E:/SnakeGame/captures/05-story-chapter.png`, `E:/SnakeGame/captures/06-story-card.png`.
+
+Suggested TS home: **`web/src/scenes/StoryScene.ts`** — `export class StoryScene extends Scene`,
+registered in `web/src/main.ts` alongside the others:
+`game.registerScene("story", (g) => new StoryScene(g, sound))`. It needs **no** `SaveData`
+handle: this scene never reads and never writes the profile (§10.14). Two pieces deserve their
+own modules:
+
+| Python | Suggested TS |
+|---|---|
+| `_Card` + `_normalise_card` / `_normalise_cards` / `_split_marker` / `_to_roman` (:128-322) | `web/src/scenes/story/cards.ts` → `normaliseCards(raw): StoryCardView[]` — pure, unit-testable, and the only place the Chapter duck-type lives (§10.3) |
+| `_Line` + `_wrap` / `_measure` + the reveal clock (:423-486, :679-734, :922-946) | `web/src/scenes/story/typewriter.ts` → `class Typewriter` — the piece most exposed to font-metric drift (§10.9) |
+| `_overlay_surface` / `_OVERLAY_CACHE` (:328-385) | `web/src/gfx/scrim.ts` → `scrimVignetteTexture(rect)` — one cached texture, generic enough that other scenes may want it |
+
+This scene calls **no** `draw_panel` and **no** `draw_bar`. Its whole widget surface is
+`draw_text`, `Button`, `draw_glow_circle`, `surface.fill` and `pygame.draw.circle`.
+`docs/port/ui.md` owns `draw_text`/`Button`; everything below is a call site.
+
+---
+
+### 10.1 Identity and registration
+
+| Property | Value | Source |
+|---|---|---|
+| Python class | `StoryScene(Scene)` | story_scene.py:492 |
+| File / lines | `snake/scenes/story_scene.py`, 492-1155 (module 1-1155) | |
+| Registry key | `C.SCENE_STORY` = `"story"` → `("story_scene", "StoryScene")` | main.py:43; config.py:200 |
+| TS key | `SCENES.STORY` = `"story"` (`web/src/app/Scene.ts:75`; the `SCENES` map is :65-76) | |
+| `transparent` | `False` | story_scene.py:501 |
+| `blocks_update` | `True` | story_scene.py:502 |
+| Who reaches it | **exactly two production callers** — `ModeSelectScene._start_story` (mode_select.py:592) and `VictoryScene._story_continue` (gameover.py:984 and :998) | |
+| Who it leaves to | whatever `next_scene` says. In production that is `C.SCENE_GAME` (mode select, victory non-final) or `C.SCENE_MENU` (victory final); the default is `C.SCENE_MENU` | :547, :816 |
+| Dev-only callers | `tools/screenshot.py:252`, `tools/playtest.py:1319, 1741, 1908, 2065, 2076` | |
+
+**Documentation-vs-code discrepancy, worth recording.** The module docstring claims "Four other
+scenes drive it (mode select, victory, game over and the menu)" (:15). That is not true of the
+shipped code. `MenuScene` contains no reference to `SCENE_STORY` at all, and
+`_ResultScene._story_continue` — the base that `GameOverScene` inherits — is
+**`self._go(C.SCENE_MENU)`**, an explicit no-op (gameover.py:534-536). `VictoryScene` overrides
+it; `GameOverScene` does not. Port the two real edges; do not build the other two.
+
+`settings.py:288` lists `C.SCENE_STORY` in `_resolve_back`'s allow-list of valid `back` targets,
+but nothing pushes settings from here, so that arm is unreachable. Leave it out.
+
+---
+
+### 10.2 The entry contract
+
+```python
+def on_enter(self, cards: Any = None, next_scene: str = C.SCENE_MENU,
+             next_kwargs: Optional[Dict[str, Any]] = None,
+             theme: Any = None, **extra: Any) -> None:        # :547-549
+```
+
+| Parameter | Type accepted | Default | Coerced by | Notes |
+|---|---|---|---|---|
+| `cards` | a list/tuple of card-shaped things, or a single card, or `None` | `None` | `_normalise_cards` (:303-322) | anything unusable becomes an empty deck |
+| `next_scene` | `str` | `C.SCENE_MENU` | `str(next_scene or C.SCENE_MENU)` (:564) — an empty string falls back to `"menu"` | never validated against the registry; a bad key is caught at `switch_scene` time (:815-821) |
+| `next_kwargs` | `dict` | `None` | `dict(next_kwargs) if isinstance(next_kwargs, dict) else {}` (:565) — a copy, so the caller's dict cannot mutate under the scene | splatted into `switch_scene` at hand-off (:816) |
+| `theme` | `P.Theme`, an `int`/`float` level index, or `None` | `None` | `_resolve_theme` (:590-604) | see below |
+| `**extra` | anything | — | only `extra["level_index"]` is read, and only as a theme fallback (:599-601) | |
+
+`_resolve_theme(theme, extra)` (:590-604), first match wins:
+
+1. `isinstance(theme, P.Theme)` → use it verbatim.
+2. `isinstance(theme, bool)` → **skipped deliberately** (the test is :595, the bare `pass` :596),
+   because `bool` is a subclass of `int` and `theme_for_level(True)` would silently mean level 1.
+3. `isinstance(theme, (int, float))` → `P.theme_for_level(int(theme))`.
+4. `extra.get("level_index")` is an `int`/`float` and not a `bool` → `P.theme_for_level(int(...))`.
+5. `P.theme_for_level(int(game.level_index))`.
+6. Any exception → `P.THEMES[0]`.
+
+Note that step 4 reads `**extra`, **not** `next_kwargs`. `tools/screenshot.py:252-253` passes
+`next_kwargs={"level_index": 3}` and no `theme=`, so the captures fall through to step 5 and use
+`game.level_index`, which the harness had left at `0` — that is why both captures are painted in
+**Neon Grid** (`accent = (0, 236, 255)`, `accent2 = (255, 60, 190)`) and not in level 4's Solar
+Flare. See §10.15.
+
+The two production call sites:
+
+| Caller | `cards` | `next_scene` | `next_kwargs` | `theme` | Line |
+|---|---|---|---|---|---|
+| `ModeSelectScene._start_story` | `[PROLOGUE?] + [Chapter] + [StoryCard(intro)]` — 2 or 3 | `C.SCENE_GAME` | `{"level_index": index}` | `P.theme_for_level(index)` | mode_select.py:592-595 |
+| `VictoryScene._story_continue`, non-final | `[StoryCard(outro)] + [Chapter?] + [StoryCard(intro)?]` — 1 to 3 | `C.SCENE_GAME` | `{"level_index": nxt}` | `P.theme_for_level(nxt)` | gameover.py:998-1000 |
+| `VictoryScene._story_continue`, final | `[StoryCard(outro), EPILOGUE]` — 2 | `C.SCENE_MENU` | `{}` | `self.theme` (the level-12 theme) | gameover.py:984-985 |
+
+Both producers are fully specified in §2.10 (`_story_cards(index)`) and §8.9
+(`_story_cards()` + the save-write ordering). **This scene contributes nothing to that
+ordering** — it neither reads nor writes `SaveData`.
+
+`on_enter` body order (:556-583), all of it inside one `try/except` that sets
+`_pending_finish = True` on any failure (:581-583) — a broken narrative screen always degrades to
+"hand over immediately", never to a half-drawn frame:
+
+1. `t = 0.0`; `_finished = False`; `_armed = False`; `_tick_cd = 0.0` (:557-560)
+2. `cards = _normalise_cards(cards)`; `index = 0` (:562-563)
+3. `next_scene`, `next_kwargs` (:564-565)
+4. `theme = _resolve_theme(theme, extra)` (:567)
+5. `_pending_finish = not self.cards` (:568)
+6. **if the deck is empty**: `_layout = []`; `_title = None`; `_roman = None`; `alpha = 0.0`;
+   `return` — no background is built, no buttons are made (:572-577)
+7. `_ensure_background()` (:579)
+8. `_begin_card(0)` (:580)
+
+---
+
+### 10.3 The card model — `_Card` and the normaliser
+
+#### 10.3.1 `_Card` (:128-139)
+
+```python
+@dataclass
+class _Card:
+    title: str = ""
+    lines: Tuple[str, ...] = ()
+    speaker: str = ""
+    roman: str = ""              # non-empty => chapter plate
+    @property
+    def is_chapter(self) -> bool: return bool(self.roman)
+```
+
+`roman` is the **only** thing that selects the chapter plate (:975). Everything upstream exists
+to decide whether to fill it in.
+
+#### 10.3.2 `_normalise_card(raw)` (:248-300) — the accept-anything ladder
+
+Returns `None` for a card holding no text; wrapped in `try/except` returning `None` (:299-300).
+
+| Input shape | Handling | Line |
+|---|---|---|
+| `None` | `None` | :256 |
+| `str` | `_as_lines(raw)`; if it produced **exactly one** line and `_split_marker` finds a numeral in it → `_Card(title=rest, lines=(), roman=roman)` (a plate); otherwise `_Card(title="", lines=lines)` | :258-268 |
+| `(str, non-str)` 2-tuple | `_Card(title=raw[0].strip(), lines=_as_lines(raw[1]))` | :271-274 |
+| any other `list`/`tuple` | `_Card(lines=_as_lines(raw))`, or `None` if empty | :275-276 |
+| object or `dict` | attribute/key ladder below | :278-298 |
+
+The attribute/key ladder, all via `_pick(source, *names)` (:235-245) which returns the **first
+present *and truthy*** attribute (`getattr`) or key (`dict.get`):
+
+| `_Card` field | Names probed, in order | Line |
+|---|---|---|
+| `title` | `title`, `name`, `heading` | :278 |
+| `lines` | `lines`, `text`, `body`, `blurb`, `intro`, `outro` | :279-280 |
+| `speaker` | `speaker`, `voice`, `attribution` | :281 |
+| `roman` | `roman` — accepted only if it `isinstance(str)` **and** `set(value.upper()) <= {I,V,X,L,C,D,M}`; else `chapter_number` if `isinstance(int)` → `_to_roman(n)`; else `""` | :283-290 |
+
+Then: `title = str(title).strip()`; if `roman` is still empty, `roman, title = _split_marker(title)`
+(:292-294); if both `title` and `lines` are empty → `None` (:295-296).
+
+Two consequences that matter for the shipped content:
+
+* **A `StoryBeat` renders its `intro`, never its `outro`** — `lines` probes `intro` before
+  `outro` (:279-280). `tools/screenshot.py` hands over `S.get_beat(3)` raw and gets the intro
+  (capture 06 shows exactly the four intro lines). `VictoryScene` needs the outro, so it builds
+  an explicit `S.StoryCard(title=beat.title, lines=tuple(beat.outro), speaker=beat.speaker)`
+  rather than passing the beat (gameover.py:944-946). Do not "simplify" that in the port.
+* **A `Chapter` renders its `blurb`** (`lines` probes `blurb` before `intro`), its `title`, and
+  its `roman` property. It has no `speaker` — and it would not matter if it did: `_draw_chapter`
+  never draws the speaker row at all (:1069-1092), so `_Card.speaker` is dead data on any card
+  promoted to a plate.
+* A `StoryBeat` has a `chapter` field but the roman probe looks for `chapter_number`, so a beat
+  is never promoted to a plate. That is deliberate.
+
+`_normalise_cards(raw)` (:303-322): a `list`/`tuple` is the item sequence; a bare `str`/`dict` is
+wrapped in a one-item list; anything else is `list()`-ed, falling back to a one-item list. The
+deck is **capped at 24 items** (`items[:24]`, :318) and `None` results are dropped.
+
+`_as_lines(value)` (:214-232): `None` → `()`; a `str` is `splitlines()`; a `list`/`tuple` is
+`str()`-mapped; anything else is `list()`-ed. Each part has tabs replaced by spaces, is
+`rstrip`ped, dropped if blank, else `strip`ped. **Capped at 8 lines** (`out[:8]`, :232).
+
+#### 10.3.3 `_split_marker(title)` (:163-211) — the chapter marker in a title string
+
+Returns `(roman, remainder)`; an empty roman means "ordinary card".
+`_SEPARATORS = "-–—:.·|"` (:149, note the en- and em-dashes),
+`_CHAPTER_WORDS = ("chapter", "chapters", "chap", "ch", "act", "part", "book")` (:148),
+`_ROMAN_CHARS = set("IVXLCDM")` (:147).
+
+```
+raw = str(title or "").strip()          ; "" -> ("", "")
+head, _, tail = raw.partition(" ")
+word = head.strip(_SEPARATORS).lower()
+
+if word in _CHAPTER_WORDS:              # "Chapter II - Cold Boot"
+    token, _, remainder = tail.strip().partition(" ")
+    number = token.strip(_SEPARATORS) ; rest = remainder
+    if not number: return ("", raw)
+else:                                   # "II. Cold Boot" / "IV"
+    token = head.strip(_SEPARATORS)
+    if not token or not set(token.upper()) <= _ROMAN_CHARS: return ("", raw)
+    if tail and head == token: return ("", raw)      # the "I ..." guard
+    number = token ; rest = tail
+
+number = number.strip()                 # :202
+if not number: return ("", raw)         # :203-204
+if number.isdigit():                    roman = _to_roman(int(number))
+elif set(number.upper()) <= _ROMAN_CHARS: roman = number.upper()
+else:                                   return ("", raw)
+return (roman, rest.strip().lstrip(_SEPARATORS).strip())
+```
+
+Worked cases:
+
+| Title | Result |
+|---|---|
+| `"Chapter II - Cold Boot"` | `("II", "Cold Boot")` |
+| `"CHAPTER 2: Name"` | `("II", "Name")` — `_to_roman(2)` |
+| `"Act III"` | `("III", "")` |
+| `"II. Cold Boot"` | `("II", "Cold Boot")` |
+| `"IV"` | `("IV", "")` |
+| `"I am here"` | `("", "I am here")` — the `head == token and tail` guard (:196-198) |
+| `"Mill Road"` | `("", "Mill Road")` — same guard; note `set("MILL") ⊆ {I,V,X,L,C,D,M}` is **true**, so the guard is the only thing saving it |
+| `"Mill. Road"` | `("MILL", "Road")` — **a genuine false positive.** No shipped title hits it; reproduce the algorithm verbatim rather than "fixing" it, and note it |
+
+`_to_roman(n)` (:152-160): `n = int(clamp(float(n), 1.0, 3999.0))`, greedy subtraction over
+`_ROMAN_VALUES` = `(1000,"M"),(900,"CM"),(500,"D"),(400,"CD"),(100,"C"),(90,"XC"),(50,"L"),(40,"XL"),(10,"X"),(9,"IX"),(5,"V"),(4,"IV"),(1,"I")` (:143-146).
+
+#### 10.3.4 The duck-type test in TypeScript — **gap V1, resolved here**
+
+`docs/port/scenes.md` §2.10 and §8.14 both defer this to the story section. The decision:
+
+Python's `Chapter.roman` is a `@property` (`snake/core/story.py:127-130`), so
+`getattr(chapter, "roman")` yields `"II"` and `isinstance(explicit, str)` passes.
+**TS's `Chapter.roman` is a method** — declared on the interface at `web/src/core/story.ts:92`
+and implemented on `ChapterRecord` (class :104) at `:113-118` — so a literal
+transcription of `_pick(raw, "roman")` returns a *function*, the `typeof value === "string"`
+arm fails, `chapter_number` is absent (the field is `number`), `_split_marker("The Working
+Layers")` finds nothing, and **the chapter silently renders as an ordinary card** — no numeral,
+no long rule, wrong vertical rhythm. That is the exact regression the bug-fix comment at
+mode_select.py:558-563 was written about.
+
+The port's roman probe must therefore be:
+
+```ts
+function romanOf(raw: unknown): string {
+  const v = (raw as { roman?: unknown }).roman;
+  const s = typeof v === "function"
+    ? String((v as () => string).call(raw))          // TS Chapter
+    : typeof v === "string" ? v : "";                // dict / plain object
+  return /^[IVXLCDM]+$/i.test(s) ? s.toUpperCase() : "";
+}
+```
+
+`typeof (card as Chapter).roman === "function"` is the duck-type test; it is the *only* thing
+that distinguishes a `Chapter` from a `StoryCard` in the TS type system, because both are
+interfaces with no runtime brand and `StoryCard` has no `roman` at all. The deck's type is
+`Array<StoryCard | Chapter>`, which is what both producers build.
+
+**Where to fix it, precisely.** §8.14 offers an alternative: have the producers hand over
+`{title: chapter.title, lines: chapter.blurb, roman: chapter.roman()}`. That is *not* the bug
+mode_select.py:558-563 describes — the Python bug was flattening into a `StoryCard`, which has
+no `roman` field at all, so the numeral was thrown away; a plain object that keeps `roman` as a
+string reaches the plate correctly through the ordinary `_pick` arm. Both fixes work. Prefer the
+normaliser anyway, for one reason: there are two producers today and the presenter's contract is
+"anything card-shaped", so the knowledge that a `Chapter` needs unwrapping belongs in the one
+place that already owns card shapes. If a third producer is ever added it inherits the fix.
+Whichever is chosen, choose **one** — a normaliser that calls `roman()` *and* a producer that
+pre-flattens is harmless, but two producers with only one of them patched is exactly the
+"same beat looked different depending on how it was reached" regression again.
+
+---
+
+### 10.4 Scene-local constants (verbatim, story_scene.py:69-122 and :328-331)
+
+Module `const`s at the top of `StoryScene.ts`; **not** in `config.ts` (`export_data.py` does not
+emit them, so a copy there would drift).
+
+| Name | Value | Line | Meaning |
+|---|---|---|---|
+| `_TEXT_W` | `940` | 69 | widest a body line or title may render before wrapping / shrinking |
+| `_CENTER_X` | `C.WINDOW_W // 2` = **640** | 70 | |
+| `_SCRIM` | `Rect(0, 58, 1280, 546)` → bottom **604** | 72 | the cinematic darkening band |
+| `_CONTINUE_RECT` | `Rect((1280-300)//2, 614, 300, 58)` = **`(490, 614, 300, 58)`** | 74-75 | `C.UI_BUTTON_W/H` = 300/58 |
+| `_SKIP_RECT` | `Rect(1020, 556, 150, 44)` | 81 | see the comment at :76-80 |
+| `_SPEAKER_Y` | `122` | 84 | normal card |
+| `_TITLE_Y` | `152` | 85 | normal card |
+| `_RULE_Y` | `246` | 86 | normal card |
+| `_LINES_Y` | `298` | 87 | normal card, first body line |
+| `_CH_LABEL_Y` | `96` | 90 | chapter plate |
+| `_CH_ROMAN_Y` | `120` | 91 | chapter plate |
+| `_CH_RULE_Y` | `268` | 92 | chapter plate |
+| `_CH_TITLE_Y` | `290` | 93 | chapter plate |
+| `_CH_LINES_Y` | `392` | 94 | chapter plate, first body line |
+| `_LINE_STEP` | `46` | 96 | normal card line pitch |
+| `_CH_LINE_STEP` | `50` | 97 | chapter plate line pitch |
+| `_TYPE_CPS` | `46.0` | 104 | **character units** per second, not characters |
+| `_NEWLINE_COST` | `8.0` | 105 | units of pause between display lines |
+| `_PUNCT_COST` | `{",":3.0, ";":3.5, ":":3.5, "-":1.5, ".":6.0, "!":6.5, "?":6.5}` | 106-109 | surcharge **after** the character |
+| `_TITLE_IN` | `0.45` s | 111 | title entrance |
+| `_TYPE_DELAY` | `0.25` s | 112 | extra wait before the body starts |
+| `_FADE_IN` | `0.26` s | 113 | card cross-fade in |
+| `_FADE_OUT` | `0.18` s | 114 | card cross-fade out |
+| `_TICK_GAP` | `0.042` s | 115 | minimum gap between typewriter ticks |
+| `_STAR_LAYERS` | `((64, 0.18, 3.0, 0.42), (44, 0.45, 8.0, 0.62), (26, 0.85, 17.0, 0.88))` = (count, depth, drift px/s, brightness) → **134 stars** | 117-122 | |
+| `_OVERLAY_TINT` | `(4, 6, 14)` | 329 | scrim/vignette colour |
+| `_SCRIM_PEAK` | `168.0` alpha | 330 | |
+| `_VIGNETTE_PEAK` | `190.0` alpha | 331 | |
+
+Point sizes are inline literals in `_build_layout` / `_begin_card` / `_draw_*` rather than module
+constants, so they are tabulated here too — the port needs them in one place:
+
+| Where | Size | Line |
+|---|---|---|
+| title, base | `58` on a chapter plate, `62` on a narrative card, then the shrink ladder | 695-703 (§10.8.1) |
+| roman numeral | `display_at(112)`, **never** laddered | 711 |
+| body copy | `get(27)` narrative, `get(25)` chapter | 715 |
+| speaker kicker | `get(15)` | 1055 |
+| `"C H A P T E R"` | `get(16)` | 1074 |
+| `"CARD n OF m"` | `get(14)` | 1132 |
+| `"CLICK TO REVEAL"` | `get(15)` | 1148 |
+| CONTINUE / BEGIN label | `get(30, bold=True)`, passed into the `Button` (so the style's own `h2/30/bold` default is never used) | 675 |
+| SKIP label | `get(20)`, overriding the ghost style's default of `body/21` | 677 |
+| overlay template | `tw, th = 128, 72`, `smoothscale`d up to the target size | 353 |
+
+Pulled from elsewhere: `C.WINDOW_W/H` = 1280/720, `C.UI_BUTTON_W/H` = 300/58,
+`C.UI_CLICK_COOLDOWN` = 0.10, `C.MAX_DT` = 0.05, `C.SCENE_MENU`/`SCENE_GAME`/`SCENE_STORY`.
+The star RNG seed is the literal **`1207`** (:541).
+
+**The `_SKIP_RECT` comment is load-bearing (:76-80)** and must survive into the port: SKIP used
+to sit at `(1090, 622)`, where the CRT bezel in `gfx/effects.py` passes only ~13 % of the drawn
+light, making a ghost-styled button effectively invisible. At `(1020, 556)` it measures ~0.73.
+If the port's post chain changes its vignette/bezel falloff, re-measure before moving it back.
+
+---
+
+### 10.5 Owned state
+
+`__init__` is :504-542; `on_enter` is :547-583; `_begin_card` is :657-677.
+
+| Attribute | Type | `__init__` value | `on_enter` resets to | Notes |
+|---|---|---|---|---|
+| `theme` | `P.Theme` | `P.theme_for_level(0)` (:506) | `_resolve_theme(theme, extra)` (:567) | |
+| `t` | float | `0.0` (:507) | `0.0` (:557) | scene clock, **real dt** |
+| `cards` | `List[_Card]` | `[]` (:510) | `_normalise_cards(cards)` (:562) | ≤ 24 |
+| `index` | int | `0` (:511) | `0` (:563), then `_begin_card` re-clamps (:659) | |
+| `next_scene` | str | `C.SCENE_MENU` (:512) | `str(next_scene or "menu")` (:564) | |
+| `next_kwargs` | `Dict` | `{}` (:513) | a **copy** of the caller's dict, or `{}` (:565) | |
+| `reveal` | float | `0.0` (:516) | `0.0` via `_begin_card` (:661) | reveal cursor, in cost units |
+| `total` | float | `0.0` (:517) | recomputed by `_build_layout` (:684, :734) | total cost of the card |
+| `card_t` | float | `0.0` (:518) | `0.0` (:660) | per-card clock |
+| `done` | bool | `False` (:519) | `False` (:662) | fully revealed |
+| `alpha` | float | `0.0` (:520) | `0.0` (:663); `0.0` on the empty-deck path too (:576) | card cross-fade |
+| `_fading_out` | bool | `False` (:521) | `False` (:664) | |
+| `_layout` | `List[_Line]` | `[]` (:522) | rebuilt by `_build_layout` (:681); `[]` on the empty-deck path (:573) | |
+| `_title` | `(Surface, Surface)?` | `None` (:523) | rebuilt (:682, :704); `None` on the empty path (:574) | (body, shadow) |
+| `_roman` | `(Surface, Surface)?` | `None` (:524) | rebuilt (:683, :710); `None` on the empty path (:575) | |
+| `_finished` | bool | `False` (:527) | `False` (:558) | latch; `_finish` fires once |
+| `_pending_finish` | bool | `False` (:528) | `not self.cards` (:568), or `True` on any `on_enter` exception (:583) | |
+| `_armed` | bool | `False` (:529) | `False` (:559), and again in `_begin_card` (:666) | "click anywhere" press latch |
+| `_tick_cd` | float | `0.0` (:530) | `0.0` (:560) | typewriter tick throttle |
+| `_spoken` | int | `0` (:531) | `0` (:665) | characters already ticked |
+| `continue_btn` | `Button` | `Button(_CONTINUE_RECT, "CONTINUE", style="primary")` (:534) | **a fresh `Button`** per card (:674-675), label `"BEGIN"` or `"CONTINUE"`, font `_font(fonts, 30, bold=True)` | |
+| `skip_btn` | `Button` | `Button(_SKIP_RECT, "SKIP", style="ghost")` (:535) | **a fresh `Button`** per card (:676-677), font `_font(fonts, 20)` | |
+| `background` | `Background?` | `None` (:538) | **not reset** — `_ensure_background` rebuilds only on a `bg_style` change (:606-616) | see below |
+| `_bg_style` | str | `""` (:539) | **not reset** (:614) | |
+| `_stars` | `List[List[float]]` | `_build_stars()` (:540-542) | **not reset** | 134 entries, `[x, y, depth*bright, size, phase, drift]` |
+| `_rng` | `random.Random(1207)` | seeded once (:541) | **not reset** | |
+
+Inherited: `self.game` (contracts.py:51-52). No other base state.
+
+**Attributes built in `__init__` but not reset in `on_enter`:**
+
+1. `_stars` — **safe and deliberate.** The field is built once and only ever mutated in place by
+   `_update_stars`. Port note: build it in the constructor. Because `_update_stars` draws from
+   `self._rng` when it recycles a star (:875), the stream advances across entries and the
+   star field does not repeat between visits. That is cosmetic; Mersenne Twister vs the TS LCG
+   makes bit-parity impossible anyway (same call as `MenuScene`'s `_rng`, §1.3).
+2. `_rng` — **safe**, per the above.
+3. `background` / `_bg_style` — **a latent bug, unreachable in Python, reachable in the port.**
+   `_ensure_background` returns early when `self.background is not None and style == self._bg_style`
+   (:609-610). It compares the *style string*, not the theme, so entering with a **different
+   `Theme` that shares a `bg_style`** keeps the previous theme's background art while every text
+   colour switches to the new theme. All twelve shipped themes have distinct `bg_style` values
+   (`grid, nebula, circuit, lava, ocean, static, ice, spores, machine, aurora, voidwarp, prism`,
+   palette.py:101-200) and `theme_for_level` is `index % 12`, so the shipped Python can never hit
+   it. A **derived** theme would — and the port already has a factory for those:
+   `blendThemes(a, b, t)` (`web/src/core/palette.ts:182`) copies `bgStyle` from the lead theme
+   (:217), so any caller handing this scene a blended theme trips it immediately. Key the cache
+   on the theme object identity, not the style name, and rebuild when it differs.
+4. `on_exit` (:585-588) drops `_layout`, `_title`, `_roman` — the per-card rasters — but
+   **not** `background`. Unlike `MenuScene.on_exit` (§1.4), this scene keeps a full-screen
+   background stage alive for the whole session. In Pixi that is a real texture leak across a
+   twelve-level campaign: either destroy it in `onExit()` and accept the rebuild, or keep it and
+   say so. Recommend destroying it — this scene is entered at most once per level and the
+   rebuild cost is hidden behind the 0.26 s fade-in.
+
+**The empty-deck path leaves stale per-card state.** `on_enter` returns at :577 after resetting
+only `_layout`/`_title`/`_roman`/`alpha`, so `reveal`, `total`, `card_t`, `done`, `_fading_out`,
+`_spoken`, `continue_btn` and `skip_btn` all keep the *previous* visit's values. It is
+unobservable — `update` hands over on the first tick (:842-845) and `draw` returns right after
+the background (:961-962) — but the port must not "tidy" this by moving the `_begin_card` call
+before the guard, and should reset those fields anyway so the invariant is unconditional.
+
+---
+
+### 10.6 Construction vs entry
+
+| Built once (`__init__`) | Built on every entry (`on_enter`) | Built per card (`_begin_card`) | Built lazily |
+|---|---|---|---|
+| `_rng` (seed 1207) and the 134 stars (`_build_stars`, :618-635) | the normalised deck, `next_scene`, `next_kwargs`, `theme` | both `Button`s, with per-card label and font (:674-677) | the `Background`, on the first entry and on every `bg_style` change (:606-616) |
+| placeholder `continue_btn` / `skip_btn` (immediately replaced on any non-empty entry) | the `Background`, via `_ensure_background` | the whole text layout: title raster, roman raster, wrapped/measured lines (`_build_layout`, :679-734) | the scrim+vignette overlay, cached module-wide by `(w, h)` (:328-385) |
+
+The scrim/vignette cache `_OVERLAY_CACHE` is **module-level**, keyed `(max(2,int(w)), max(2,int(h)))`,
+and clears itself when it exceeds 4 entries (:382-384). In the port that is one `Texture` per
+viewport size; rebuild it in `onResize()` and destroy the old one.
+
+`_build_layout` runs **once per card**, never per frame (:680). Everything the typewriter needs
+— rasters, per-character advances, per-character costs, per-line start offsets — is precomputed
+there. Keep that: the reveal loop must be pure arithmetic.
+
+---
+
+### 10.7 The two presentations, and what selects them
+
+`draw()` branches on exactly one predicate (:975):
+
+```python
+if card.is_chapter:  self._draw_chapter(...)      # roman != ""
+else:                self._draw_card(...)
+```
+
+| | Narrative card (`_draw_card`, :1050-1067) | Chapter plate (`_draw_chapter`, :1069-1092) |
+|---|---|---|
+| Selected by | `_Card.roman == ""` | `_Card.roman != ""` |
+| Produced by | a `StoryCard`, a `StoryBeat`, a dict, a bare string | a `Chapter` (via its `roman` property/method), a dict with `roman`/`chapter_number`, or a title carrying a marker |
+| Kicker row | `speaker.upper()` at y 122, only when `speaker` is non-empty | the fixed literal `"C H A P T E R"` at y 96, **always** |
+| Numeral | none | `roman` at y 120, `display_at(112)` |
+| Title | y 152, `display_at(62)` ladder | y 290, `display_at(58)` ladder |
+| Rule | y 246, half-width **190** (x 450..830), drawn **only when a title exists** (`if self._title is not None`, :1060-1065) | y 268, half-width **300** (x 340..940), drawn **unconditionally** (:1086) |
+| Body | y 298, step 46, `get(27)` | y 392, step 50, `get(25)` |
+| Title glow | `draw_glow_circle(640, 186, titleW*0.42, accent, 0.20*alpha)` (:1061-1063) | **none** |
+| Numeral glow | — | `draw_glow_circle(640, 186, romanW*0.62, accent, breathe*alpha)`, `breathe = 0.30 + 0.14*pulse(t, 1.6)` (:1079-1082) |
+| Entrance lift multiplier | speaker `×0.5`, title `×1.0` | label `×0.4`, roman `×1.4`, title `×0.6` |
+
+Both share: the background, the star field, the ambient motes, the scrim+vignette, the
+typewriter body, the caret, and all of the chrome (§10.8). There are only these two modes —
+there is no third layout and no per-card style flag.
+
+---
+
+### 10.8 Layout — the complete coordinate table
+
+Design pixels, 1280 × 720. **Every `y` is a top edge** (`draw_text`'s `pos[1]` is documented as
+the top edge, ui.py:274-275, and `Label.place` in `web/src/ui/text.ts:172-173` matches).
+`alpha`/`lift` come from `_title_alpha()` (:1045-1048):
+
+```
+f     = ease_out_cubic(clamp(card_t / 0.45, 0, 1))
+alpha = f * self.alpha                 # self.alpha is the 0.26 s card cross-fade
+lift  = (1 - f) * -16.0                # px, so the row starts 16 px HIGH and drops in
+```
+
+Colour shorthand: `A` = `theme.accent`, `A2` = `theme.accent2`, `T` = `theme.text`,
+`TD` = `theme.text_dim`, `W` = `P.UI_WHITE` = `(240, 246, 255)`,
+`L(a,b,t)` = `lerp_color`, `S(c,f)` = `shade`, `pulse(t,s) = 0.5 + 0.5*sin(t*s)`.
+
+#### Chrome — drawn on both presentations (`_draw_chrome`, :1125-1155)
+
+| Element | x | y | size | anchor | font | colour | condition | Line |
+|---|---|---|---|---|---|---|---|---|
+| `"CARD {index+1} OF {max(1,len(cards))}"` | 1240 | 30 | — | right | `get(14)` | `dim = S(TD, 0.95)` | always | :1131-1132 |
+| progress pip, current (`i == index`) | `1240 - 12*(n-1) + 12*i` | 58 (centre) | r = 3 | centre | — | `L(A, W, 0.4)` | always | :1139-1140 |
+| progress pip, other | same | 58 (centre) | r = 2 | centre | — | `S(dim, 0.55)` if `i < index` else `S(dim, 0.30)` | always | :1142-1143 |
+| `"CLICK TO REVEAL"` | 40 | 636 | — | left | `get(15)` | `S(dim, 0.45 + 0.35*pulse(t, 2.4))` | `not done` | :1146-1149 |
+| CONTINUE / BEGIN button | 490 | 614 | 300 × 58 | rect | `get(30, bold=True)` | `style="primary"` | `done` | :1152-1153 |
+| SKIP button | 1020 | 556 | 150 × 44 | rect | `get(20)` | `style="ghost"` | `skip_live` | :1154-1155 |
+
+Pip pitch is 12 px and the row is **right-aligned to x = 1240**: `x = right - span + i*pitch`
+with `span = 12*(n-1)`, `right = 1280 - 40` (:1133-1138). For a 2-card deck that is x = 1228 and
+1240; for 3 cards, 1216 / 1228 / 1240.
+
+The CONTINUE label is decided in `_begin_card` (:671-672):
+`label = "BEGIN" if (index >= len(cards)-1 and next_scene == C.SCENE_GAME) else "CONTINUE"`.
+The comment (:670-671) is the intent: *the last card promises what it actually leads to*.
+So the final card of a mode-select or victory hand-off reads BEGIN; the final card of the
+epilogue deck (which goes to the menu) reads CONTINUE.
+
+`skip_live` (:640-648): `len(self.cards) > 1 or not self.done`. It gates the button's drawing,
+its event handling **and** its hit-test in `_over_chrome`, all three.
+
+**Nothing in this table fades with the card.** `_draw_chrome` never multiplies by `self.alpha`
+or by `_title_alpha()` (:1125-1155): the counter, the pips, CLICK TO REVEAL and both buttons are
+painted at full strength through the 0.26 s fade-in and the 0.18 s fade-out, and so are the star
+field, the ambient motes and the scrim. Only the card's own content — speaker/label, glow,
+numeral, title, rule and body lines — is faded. In the port that means the chrome container must
+sit **outside** whatever container carries the card alpha; a naive "fade the scene root" reads as
+the whole screen dipping between cards, which the Python never does.
+
+#### Narrative card (`_draw_card`, :1050-1067)
+
+| Element | x | y | anchor | font | colour | condition | Line |
+|---|---|---|---|---|---|---|---|
+| speaker, `.upper()` | 640 | `122 + lift*0.5` | centre | `get(15)` | `S(L(A2, W, 0.2), 0.55 + 0.45*alpha)` | `card.speaker` non-empty | :1054-1058 |
+| title glow | 640 | 186 (= `152 + 34`) | centre | — | `A`, intensity `0.20*alpha`, radius `titleW*0.42` | `_title is not None` | :1061-1063 |
+| title shadow | `640 - w/2 + 3` | `152 + lift + 3` | — | as title | black at `0.55*alpha` | same | :1038-1039 |
+| title | 640 | `152 + lift` | centre | `display_at(62)` ladder | `L(A, W, 0.55)` | same | :1064, :704-706 |
+| rule | 640 ± 190 (x 450..830) | 246, 2 px tall | — | — | see `_rule` below | same | :1065 |
+| body line *i* | 640 | `298 + 46*i` | centre | `get(27)` | `L(T, W, 0.25)` | per revealed width | :715-731, :1094-1117 |
+
+#### Chapter plate (`_draw_chapter`, :1069-1092)
+
+| Element | x | y | anchor | font | colour | condition | Line |
+|---|---|---|---|---|---|---|---|
+| `"C H A P T E R"` (literal, with spaces) | 640 | `96 + lift*0.4` | centre | `get(16)` | `S(TD, 0.7 + 0.3*alpha)` | always | :1074-1076 |
+| numeral glow | 640 | 186 (= `120 + 66`) | centre | — | `A`, intensity `(0.30 + 0.14*pulse(t, 1.6))*alpha`, radius `romanW*0.62` | `_roman is not None` | :1079-1082 |
+| numeral | 640 | `120 + lift*1.4` | centre | `display_at(112)` | `L(A, W, 0.30)` | same | :1083-1084, :710-712 |
+| rule | 640 ± 300 (x 340..940) | 268, 2 px tall | — | — | see below | **always** | :1086 |
+| title | 640 | `290 + lift*0.6` | centre | `display_at(58)` ladder | `L(A, W, 0.55)` | `_title is not None` | :1088-1090 |
+| body line *i* | 640 | `392 + 50*i` | centre | `get(25)` | `L(T, W, 0.25)` | per revealed width | :715-731 |
+
+#### 10.8.1 The title shrink ladder (`_build_layout`, :694-712)
+
+The title raster is built once per card, at the largest size whose measured width fits
+`_TEXT_W = 940`:
+
+| Step | Code | Line |
+|---|---|---|
+| base size | `size = 58 if chapter else 62` | :695 |
+| ladder | `for trial in (size, size - 8, size - 16, size - 22)` → chapter `(58, 50, 42, 36)`, narrative card `(62, 54, 46, 40)` | :697 |
+| floor | every rung is fetched as `_font(fonts, max(24, trial), display=True)`, so nothing under 24 pt is ever asked for | :698 |
+| test | `title_font.size(card.title)[0] <= _TEXT_W` → `break` | :700-701 |
+| on error | a `font.size` failure `break`s immediately, keeping the rung it is standing on | :702-703 |
+| nothing fits | the loop simply ends on the last rung and uses it — the title overflows rather than shrinking further | :697-703 |
+
+`title_font = _font(fonts, size, display=True)` at :696 is **dead**: the loop's first iteration
+overwrites it before anything reads it. Do not reproduce it.
+
+The roman numeral is **not** laddered — always `display_at(112)` (:711) — so a long numeral would
+simply overflow. Shipped numerals are I..IV, 109 px at the widest (§10.8, measured geometry).
+
+Port: `FontBook.fit(ladder, text, maxWidth)` (`web/src/gfx/fonts.ts:328`) is this loop exactly —
+largest-first, and it falls back to the **last** entry rather than overflowing the ladder
+(`fonts.ts:328-335`). Hand it `[displayAt(62), displayAt(54), displayAt(46), displayAt(40)]`
+(or the chapter rungs) and `_TEXT_W`. Do not hand-roll the loop.
+
+#### `_rule(y, half, theme, alpha)` (:1003-1026)
+
+26 segments across `span = 2*half`, each 2 px tall, at the given `y`:
+
+```
+for i in 0..25:
+    f0, f1 = i/26, (i+1)/26 ; mid = (f0+f1)/2
+    power  = (1 - abs(mid - 0.5)*2) ** 0.8              # 0 at the tips, 1 in the middle
+    col    = shade(lerp_color(A, A2, mid), power * alpha)
+    x0, x1 = 640 - half + int(span*f0), 640 - half + int(span*f1)
+    if x1 > x0: fill(col, (x0, y, x1 - x0, 2))
+draw_glow_circle(640, y + 1, half * 0.35, A, 0.16 * alpha)
+```
+
+Both edges of a segment come off the same denominator on purpose (:1010-1011) — computing them
+independently leaves gaps. The rule is a **left-to-right accent→accent2 gradient**, not a flat
+line: the left tip is `accent`, the right tip `accent2`, both faded to nothing.
+
+#### Measured geometry, for building without reopening Python
+
+Measured with the shipped `FontBook` (UI face `segoeui`, display face `bahnschrift`,
+`pygame.font.SysFont`), because several of these feed glow radii:
+
+| Quantity | Value |
+|---|---|
+| body line box height, `get(27)` | 36 px (so 10 px of leading at step 46) |
+| body line box height, `get(25)` | 34 px (16 px of leading at step 50) |
+| speaker `get(15)` height | 20 px |
+| chapter label `get(16)` height | 22 px |
+| counter `get(14)` height | 19 px |
+| `display_at(62)` height | 62 px; widest beat title `"The Last Light Bends Inward"` = **793 px** |
+| `display_at(58)` height | 58 px; widest chapter title `"The Working Layers"` = **516 px** |
+| `display_at(112)` height | 112 px; roman widths **I 32, II 63, III 94, IV 109** |
+| widest shipped body line | **783 px** — `"You are the machine now. Every corridor, every gate, every dead lane."` (epilogue, at `get(27)`) |
+
+**No shipped title triggers the shrink ladder and no shipped body line triggers the wrap** —
+the headroom under `_TEXT_W = 940` is 147 px (19 %) on titles and 157 px (20 %) on body copy.
+See §10.9 for why that margin is the whole story of the port's font risk.
+
+**Overflow risk to keep in mind, not currently reachable.** `_as_lines` allows 8 lines and
+`_build_layout` allows 9 after wrapping (:723). Nine narrative lines from y 298 at step 46 put
+the last line's top at 666 and its box bottom at 702 — below the scrim (which ends at 604) and
+straight through the CONTINUE button (614..672). Nine chapter lines from 392 at step 50 end
+off-screen at 792. Shipped content maxes out at 4 lines (beat intros, last line top 436). Assert
+`display.length <= 4` in the port's dev build rather than discovering it with new copy.
+
+---
+
+### 10.9 The text presentation — wrap, measure, cost, reveal
+
+This is the part of the scene with the most port risk, so it is specified end to end.
+
+#### 10.9.1 Word wrap — greedy, measured, at 940 px
+
+`_wrap(text, font, max_w)` (:446-469):
+
+```
+if font.size(text)[0] <= max_w: return [text]     # fast path, and the only path in practice
+words   = text.split(" ")                          # a single ASCII space; no tabs (stripped
+current = ""                                       #   by _as_lines), no other whitespace
+for word in words:
+    candidate = word if not current else current + " " + word
+    if font.size(candidate)[0] > max_w and current:
+        out.append(current); current = word
+    else:
+        current = candidate
+if current: out.append(current)
+return out or [text]
+```
+
+Greedy, first-fit, no hyphenation, **no minimum**: a single word wider than 940 px is emitted on
+its own line and overflows, because the `and current` guard stops it being split. Every
+`font.size` call is individually guarded; on an exception the fast path returns `[text]` (:451-452)
+and the loop treats the candidate as fitting (:460-461).
+
+Wrapping happens **once**, in `_build_layout` (:721-722), across all of `card.lines`; the
+resulting display list is then truncated to 9 (:723). So a card that wraps produces *more*
+display lines than source lines, and the truncation is applied after.
+
+**Font-metric divergence — flag F1.** `_wrap`, the title shrink ladder (:697-703) and `_measure`
+(:472-486) all consult **pygame** metrics (`Font.size`, `SysFont("segoeui"/"bahnschrift")`).
+The port measures with the browser's `CanvasRenderingContext2D.measureText` through
+`FontBook.measureWidth` (`web/src/gfx/fonts.ts:301`) over `UI_STACK` /
+`DISPLAY_STACK` (`fonts.ts:52-59`). On Windows both resolve to the same faces and the numbers
+should track; on Android and iOS the stacks fall through to Roboto / Helvetica Neue /
+`system-ui`, and `Verdana` sits in the UI stack as a late fallback and is **much** wider.
+Consequences, in order of likelihood:
+
+1. A wider face pushes the widest body line (783 px) past 940 and the wrap fires where Python
+   never wraps. Result: an extra display line, everything below it shifted down by 46/50 px, and
+   a card whose reveal takes 8 units longer. Not fatal, but it is a visible difference from the
+   captures.
+2. A wider display face pushes `"The Last Light Bends Inward"` (793 px) past 940 and the title
+   drops a rung on the ladder (62 → 54), changing the title's size for one beat only.
+3. Per-character advances (`_measure`) differ, so the caret sits a pixel or two off where Python
+   put it. Invisible.
+
+Mitigation: keep the wrap and the ladder (they are cheap and they are the safety net), but
+**assert in a dev build that no shipped line wraps and no shipped title shrinks**, and if a
+platform trips it, prefer narrowing `UI_STACK` for this scene over re-authoring the copy.
+
+#### 10.9.2 Per-character measurement (`_measure`, :472-486)
+
+For each line, two parallel arrays of length `len(text) + 1`:
+
+* `adv[i]` = `font.size(text[:i])[0]` — the pixel width of the first *i* characters, i.e. the
+  **cumulative prefix width including kerning**, not a sum of per-glyph advances. `adv[0] = 0`.
+  On a measurement failure the fallback is `width += 10` per character (:481-482).
+* `cum[i]` = the reveal **cost** after *i* characters, `cum[0] = 0.0`, and
+  `cum[i+1] = cum[i] + 1.0 + _PUNCT_COST.get(text[i], 0.0)`.
+
+So the cost of a character is charged **after** it appears: the pause happens once the comma is
+on screen, which is what makes it read as breath rather than hesitation.
+
+#### 10.9.3 The reveal clock
+
+`_build_layout` (:725-734) lays the lines out head to tail on one global cost axis:
+
+```
+cursor = 0.0
+for i, text in enumerate(display):
+    line.start = cursor                          # this line's offset on the global axis
+    line.y     = top + i * step
+    line.x     = 640 - body.get_width() // 2     # centred, integer, computed ONCE
+    cursor    += cum[-1] + _NEWLINE_COST         # 8.0 units of pause after every line
+self.total = max(0.0, cursor - _NEWLINE_COST)    # the trailing pause is not charged
+```
+
+`update` advances `reveal += _TYPE_CPS * dt` = **46 cost units per second**, clamped to `total`
+(:916). `_chars_shown(line)` (:936-946) converts back:
+
+```
+local = reveal - line.start
+if local <= 0:              return 0
+if local >= line.cum[-1]:   return len(line.text)
+n = bisect_right(line.cum, local) - 1
+return clamp(n, 0, len(line.text))
+```
+
+Because the axis is global and each line carries an 8-unit lead-in, **lines reveal strictly in
+order, one at a time**, with a `8/46 ≈ 0.174 s` beat between them. There is no per-line stagger
+constant beyond `_NEWLINE_COST`, and no per-line fade.
+
+Resolved reveal durations for the shipped decks (cost / 46, plus the fixed 0.70 s gate):
+
+| Card | Cost | Typing | Total to `done` |
+|---|---|---|---|
+| Chapter II blurb (2 lines) — capture 05 | 117.0 | 2.54 s | **3.24 s** |
+| Beat 4 "Coronal Lanes" intro (4 lines) — capture 06 | 232.0 | 5.04 s | **5.74 s** |
+| `PROLOGUE` (4 lines) | 224.0 | 4.87 s | 5.57 s |
+| `EPILOGUE` (4 lines) | 246.0 | 5.35 s | 6.05 s |
+| Worst intro — beat 12 "Everything, Refracted" | 254.0 | 5.52 s | **6.22 s** |
+| Worst outro — beat 9 "The Machine Wants Feeding" | 172.0 | 3.74 s | 4.44 s |
+
+A three-card chapter transition therefore runs about 13 s unskipped. That is why SKIP is always
+present and why a click completes rather than advances.
+
+#### 10.9.4 Painting a partially revealed line (`_draw_lines`, :1094-1122)
+
+```
+a = int(clamp(self.alpha, 0, 1) * 255) ; if a <= 2: return
+for line in self._layout:
+    shown = _chars_shown(line) ; if shown <= 0: continue
+    width = line.adv[min(shown, len(line.adv) - 1)] ; if width <= 0: continue
+    area  = Rect(0, 0, width, line.body.get_height())
+    blit(line.shadow, (line.x + 2, line.y + 2), area=area)   # alpha = a * 0.5
+    blit(line.body,   (line.x,     line.y),     area=area)   # alpha = a
+    if shown < len(line.text): caret = (line.x + width, line.y, height)
+if caret and not self.done:
+    fill(shade(L(A, W, 0.4), 0.55 + 0.45*pulse(t, 9.0)),
+         (caret.x + 3, caret.y + 4, 2, max(6, caret.h - 10)))
+```
+
+The line is rendered **once, in full**, and then *clipped* to the revealed width — it is not
+re-rasterised per character. The caret is a 2 px column, 4 px below the line top and
+`max(6, h-10)` tall (so 26 px on a 36 px body line), 3 px to the right of the last revealed
+pixel, blinking at `pulse(t, 9.0)` on the **scene** clock. Only one caret is ever live: the loop
+overwrites, and only one line is partial at a time.
+
+**Port shape.** Use one `Label` per display line plus a `Graphics` rect mask, exactly the idiom
+`web/src/ui/bar.ts:159` and `web/src/ui/hud/Hud.ts:144-146` already use:
+
+```ts
+label.place(640, line.y, "center");     // Label.place takes the TOP edge
+mask.clear().rect(line.x, line.y, width, line.height).fill({ color: 0xffffff });
+label.mask = mask;                       // width = adv[shown], recomputed only when shown changes
+```
+
+Do **not** implement this as `label.set(text.slice(0, shown))`: that re-rasterises on every
+character, mints a distinct glyph-cache entry per prefix (a 60-character line is 60 entries
+against `GLYPH_CACHE_LIMIT = 900`, `web/src/ui/text.ts:38`), and differs from Python anyway —
+Python clips a fully kerned raster, whereas a prefix re-render re-kerns the cut.
+
+**One `Label` caveat.** `Label.setAlpha` fades only the body sprite; the shadow keeps a fixed
+`TEXT_SHADOW_ALPHA / 255 = 0.588` (`text.ts:196-199`). Python fades both together
+(`shadow.set_alpha(a*0.5)` for body lines, `a*0.55` for the title/roman pair, :1038, :1109).
+Set the **container** alpha (`label.alpha = a`) instead: that multiplies the shadow to
+`0.588 * a` against Python's `0.55 * a` (title/roman) and `0.50 * a` (body lines) — 0.04 and
+0.09 of opacity heavier, i.e. +7 % and +18 % relative — and is the only way to get both to fade.
+The shadow offset also differs by a pixel on the title (Python 3, `Label` 2, `text.ts:34`);
+accept it.
+
+#### 10.9.5 Pagination, auto-advance, and per-line reveal — what does *not* exist
+
+State it explicitly so nobody builds it:
+
+* **There is no pagination.** One card is one screenful. A card that does not fit simply
+  overflows (§10.8). There is no scroll, no "more" indicator and no page-break rule.
+* **There is no auto-advance.** Nothing anywhere advances `index` on a timer. The only paths to
+  the next card are `_primary_action` (click / key) and the CONTINUE button, both of which set
+  `_fading_out` and let `_update_card` do the swap when `alpha` reaches 0 (:897-904). A card sits
+  at `done = True` indefinitely.
+* **There is no per-line fade or per-line stagger** beyond the 8-unit `_NEWLINE_COST` gap. Every
+  revealed line shares the single card-wide `alpha`.
+* **There is no per-glyph animation**: no jitter, no scale-in, no colour ramp. A revealed
+  character is simply the corresponding column of the finished raster.
+
+---
+
+### 10.10 `update(dt)` — exact order
+
+`update` (:835-856), whole body inside `try/except: pass` (:855-856).
+**Every consumer here takes real dt.** This is a shell-level scene: `fx.time_scale()` is never
+read, and `integration.md` §10's real-dt rule applies to all of it.
+
+1. `dt = clamp(float(dt), 0.0, C.MAX_DT)` — **0.05 s** (:837).
+2. `self.t += dt` (:838).
+3. If `_pending_finish`: set it `False`, call `_finish()`, **return** (:842-845). An empty deck
+   hands over on the very first tick it is given. Whether any story frame reaches the screen
+   depends on where the caller switched from: the loop is `_pump_events()` → `update(dt)` →
+   `draw()` (main.py:486-490) and `switch_scene` swaps the stack **inline** (main.py:307-314), so
+   both production callers — which act from `handle_event` — get the hand-off inside the same
+   frame's `update`, and this scene is never drawn at all. A caller that switched from `update`
+   instead would show exactly one background-only frame; that is what the `draw` early-exit at
+   :961-962 exists for. Either way `game.fx.begin_transition()` (main.py:314) covers it.
+4. If `_finished`: **return** (:846-847).
+5. `_update_buttons(dt)` (:849).
+6. `background.update(dt, focus=game.mouse_pos)` if the background exists (:850-851).
+7. `_update_stars(dt)` (:852).
+8. `_emit_particles(dt)` (:853).
+9. `_update_card(dt)` (:854).
+
+#### `_update_buttons(dt)` (:858-868)
+
+```
+mouse = game.mouse_pos
+for button, live in ((skip_btn, skip_live), (continue_btn, done)):
+    if not live: button.hovered = False ; continue
+    was = button.hovered
+    button.update(dt, mouse)
+    if button.hovered and not was: self._play("hover")     # volume 1.0
+```
+
+A non-live button is **not** updated, so its `_hover_t` / `_press_t` / `_cool` freeze rather
+than decay. Harmless here, because both buttons are freshly constructed per card (:674-677) and
+neither is drawn while non-live.
+
+**The hover-cue ordering, and why it matters for the port.** Python pumps events before
+`update` (main.py:486-489), and `Button.handle_event`'s `MOUSEMOTION` arm already writes
+`self.hovered` (ui.py:473-475; its `MOUSEBUTTONDOWN` arm sets it too, ui.py:476-480). So on a
+mouse-in the motion event sets `hovered = True` *first*, `was` is
+already `True`, and **no hover cue plays**. The cue fires only when hover becomes true without a
+motion event — i.e. when a button *arrives under a resting pointer*: CONTINUE appearing the frame
+after `done` flips, or SKIP becoming live again. That is exactly the behaviour
+`web/src/scenes/GameplayScene.ts:228-239` reproduces by draining `game.uiEvents` **before**
+calling `button.update`. Keep that order, and feed events to `skipBtn` only when `skipLive` and
+to `continueBtn` only when `done` — Python's guards at :744 and :748.
+
+`Button.update` internally re-clamps dt to 0.1 and uses exponential approach
+(`1 - exp(-13*dt)` hover, `1 - exp(-22*dt)` press, ui.py:451-467) — `ui.md`'s territory.
+
+#### `_update_stars(dt)` (:870-875)
+
+```
+for star in self._stars:                # [x, y, depth, size, phase, drift]
+    star[0] -= star[5] * dt
+    if star[0] < -4.0:
+        star[0] += C.WINDOW_W + 8.0     # += 1288
+        star[1]  = self._rng.uniform(0.0, 720.0)
+```
+
+Pure leftward drift at 3 / 8 / 17 px per second by layer, no vertical motion, no dt-dependent
+smoothing. A recycled star gets a fresh y but keeps its depth, size and twinkle phase.
+
+#### `_emit_particles(dt)` (:877-887)
+
+One call, every frame, guarded:
+
+```
+particles.ambient(Rect(0, 40, 1280, 680),
+                  lerp_color(theme.accent2, P.UI_WHITE, 0.2),
+                  dt, rate=11.0, turbulence=0.35, twinkle=0.30)
+```
+
+#### `_update_card(dt)` (:889-920)
+
+1. `card = self.card`; if `None` → `_finish()`, return (:890-893). (`card` is the property at
+   :650-655: `cards[index]` when in range, else `None`.)
+2. `self.card_t += dt` (:895).
+3. **If `_fading_out`** (:897-904): `alpha = max(0, alpha - dt/0.18)`. When `alpha <= 0`:
+   `_finish()` if `index + 1 >= len(cards)`, else `_begin_card(index + 1)`. **Return.**
+4. `alpha = min(1.0, alpha + dt/0.26)` (:906).
+5. If `done` → return (:908-909).
+6. If `card_t < _TITLE_IN + _TYPE_DELAY` = **0.70 s** → return (:910-911). The body cannot start
+   before the title has landed.
+7. If `total <= 0.0` → `done = True`, return (:912-914). A title-only card (a chapter plate with
+   no blurb, or `"Act III"`) completes the instant the gate opens.
+8. `reveal = min(total, reveal + 46.0*dt)` (:916).
+9. `_tick_cd = max(0.0, _tick_cd - dt)` (:917).
+10. `_speak()` (:918).
+11. If `reveal >= total` → `done = True` (:919-920).
+
+Note the ordering consequence: `done` flips at step 11, *after* `_update_buttons` has already
+run for this frame, so CONTINUE first updates (and first draws) on the **following** frame.
+`wait_for_story` (`tools/screenshot.py:379-387`) steps 12 extra frames after `done` (:384) for
+exactly this reason — that is also long enough for the button's hover/idle weights to settle.
+
+#### `_speak()` (:922-934)
+
+```
+shown = sum(_chars_shown(line) for line in self._layout)
+if shown > self._spoken:
+    if self._tick_cd <= 0.0:
+        self._tick_cd = _TICK_GAP        # 0.042 s
+        self._play("hover", 0.22)
+    self._spoken = shown
+```
+
+`_spoken` advances whether or not the tick actually played, so the throttle skips ticks rather
+than queueing them: at 46 cps the theoretical tick rate is ~46 Hz and the 0.042 s floor caps it
+at ~24 Hz. Guarded by its own `try/except` (:933-934).
+
+#### Easing curves used anywhere in this scene
+
+| Curve | Where | Formula |
+|---|---|---|
+| `ease_out_cubic` | title/roman/speaker entrance, `_title_alpha` (:1047) | `f = clamp(t,0,1) - 1; f³ + 1` (contracts.py:193-196; TS `easeOutCubic`, `core/mathx.ts:53-56`) |
+| linear | card fade in (`/0.26`) and out (`/0.18`) (:898, :906) | |
+| linear | the reveal cursor (:916) | |
+| `pulse(t, s)` | numeral breathe (1.6), caret blink (9.0), CLICK-TO-REVEAL fade (2.4) (:1079, :1121, :1147) | `0.5 + 0.5*sin(t*s)` (contracts.py:214-216; TS `pulse`, `mathx.ts:74-76`) |
+| `x^0.8` | rule brightness falloff (:1016) | |
+| exponential | button hover/press, inside `Button.update` | `ui.md` |
+
+---
+
+### 10.11 `draw()` — layer order
+
+`draw` (:951-982), whole body inside `try/except: pass`. Top of the list is painted **first**:
+
+1. **Background** — `self.background.draw(surface)`, or `surface.fill(theme.bg_bottom)` when it
+   is `None` (:956-959). The style is the resolved theme's own `bg_style` (:608), so this scene
+   can show **any** of the twelve backdrops — whichever belongs to the level the deck is leading
+   into, not a fixed one; the captures show `grid` only because the harness left `level_index`
+   at 0 (§10.15). Python builds it for `pygame.Rect(0, 0, 1280, 720)` — the **design box**
+   (:612-613).
+2. **Early exit** — if `_pending_finish or _finished`, return here (:961-962). The one frame of
+   an empty deck shows the background and nothing else.
+3. **Stars** — `_draw_stars` (:964, :985-1000).
+4. **Particles** — `game.particles.draw(surface)`, guarded (:965-968). Note this is **below**
+   the scrim, so the motes are dimmed by it inside the band.
+5. **Scrim + vignette** — `surface.blit(_overlay_surface(1280, 720), (0, 0))` (:970).
+6. **The card** — `_draw_chapter` or `_draw_card`, which internally paints the kicker, the glow,
+   the numeral/title, the rule and then the typewriter body + caret (:972-978).
+7. **Chrome** — `_draw_chrome`: counter, pips, CLICK TO REVEAL, CONTINUE, SKIP (:980).
+
+#### `_draw_stars` (:985-1000)
+
+```
+mx, my = game.mouse_pos                     # default (640, 360)
+ox = (mx - 640) / 640 ; oy = (my - 360) / 360
+base = lerp_color(theme.text, theme.accent2, 0.35)
+for x, y, depth, size, phase, _ in self._stars:
+    twinkle = 0.55 + 0.45*sin(t*1.9 + phase)
+    col = shade(base, (0.25 + 0.85*depth) * twinkle)
+    fill(col, (int(x - ox*depth*18.0), int(y - oy*depth*11.0), int(size), int(size)))
+```
+
+`depth` in the array is the *product* `layer_depth * layer_brightness`, baked at build time
+(:631): **0.0756, 0.2790, 0.7480** for the three layers. So parallax travel is at most
+`0.748 * 18 = 13.5 px` horizontally and `8.2 px` vertically, on the **pointer**, not the snake.
+Stars are 1 or 2 px axis-aligned squares (`randint(1, 2)`, :632), not circles.
+
+#### `_overlay_surface(w, h)` (:334-385) — the scrim band and the vignette in one blit
+
+Authored on a **128 × 72** template and `smoothscale`d to `(w, h)`, because the whole thing is
+low-frequency (:344-347). Per template pixel, with `key = (w, h)`:
+
+```
+band_top = 58 / h        # 0.0805556 at 720
+band_bot = 604 / h       # 0.8388889 at 720   (_SCRIM.bottom)
+band_span = max(1e-3, band_bot - band_top)                       # 0.7583333
+
+vy = (j + 0.5) / 72
+if band_top <= vy <= band_bot:
+    f = (vy - band_top) / band_span
+    scrim = 168 * (f/0.14)**1.5           if f < 0.14
+          = 168 * (1 - (f-0.72)/0.28)**1.6 if f > 0.72
+          = 168                            otherwise
+else: scrim = 0
+s = clamp(scrim, 0, 255) / 255
+
+dx = (i + 0.5)/128 * 2 - 1 ; dy = vy*2 - 1
+d  = clamp(hypot(dx*0.94, dy) / 1.30, 0, 1)
+v  = clamp(190 * d**2.3, 0, 255) / 255
+
+alpha = 255 * (1 - (1-s)*(1-v))            # two translucent layers stacked
+colour = (4, 6, 14)
+```
+
+Resolved against 1280 × 720: the band ramps in from design y **58 to 134** (`f = 0.14`), holds
+at `168/255 = 0.659` from **134 to 451** (`f = 0.72`), and ramps out from **451 to 604**. The
+vignette is 0 at the centre and `190/255 = 0.745` in the corners (where `d` clamps to 1 from
+1.056). Combined corner alpha is 0.745; combined mid-band alpha is 0.659 rising toward the edges.
+
+**Port note — the overscan question.** Per the settled convention the port builds backgrounds at
+`game.viewport.overscan`, not the design box (`GameplayScene.rebuildBackground`,
+`web/src/scenes/GameplayScene.ts:200-208`). The overlay and the star field are the two things
+that must then decide. Recommendation, flagged as **Q-S1** in §10.17:
+
+* **Background** → overscan, as everywhere else.
+* **Scrim + vignette** → build the texture at the **overscan** size but keep the band pinned to
+  design y, i.e. `bandTop = (58 - overscan.y) / overscan.h`,
+  `bandBot = (604 - overscan.y) / overscan.h`. That preserves the band's position relative to the
+  text (which is what it is for) and lets the vignette reach the real edges of the frame instead
+  of leaving un-darkened strips.
+* **Stars** → build over the overscan rect and recycle with `overscan.w + 8`, otherwise a wide
+  phone shows two starless columns over a background that does extend.
+* All three rebuild in `onResize()`.
+
+---
+
+### 10.12 Input and transitions
+
+`handle_event` (:739-773), all inside `try/except: pass`. Order matters — the first arm that
+fires returns.
+
+1. `if self._finished or self._pending_finish: return` (:741-742). Once the hand-off has been
+   committed, every event is dropped.
+2. `if self.skip_live and self.skip_btn.handle_event(event): self._click(); self._finish(); return`
+   (:744-747).
+3. `if self.done and self.continue_btn.handle_event(event): self._click(); self._advance(); return`
+   (:748-751).
+4. `MOUSEBUTTONDOWN`, `button == 1`: `self._armed = not self._over_chrome(event.pos)`; return
+   (:754-758).
+5. `MOUSEBUTTONUP`, `button == 1`: `armed, self._armed = self._armed, False`; if `armed` **and**
+   still not over chrome → `_primary_action()`; return (:759-763).
+6. `KEYDOWN` (:764-771) — table below.
+
+`_over_chrome(pos)` (:775-783) is `skip_live and _SKIP_RECT.collidepoint(pos)`, or
+`done and _CONTINUE_RECT.collidepoint(pos)`. It is checked on **both** the press and the release
+(:757, :761), so a press that lands on a live button can never also count as a "click anywhere",
+and dragging from the background onto a button cancels.
+
+| Binding | Kind | Effect | Line |
+|---|---|---|---|
+| Left-click SKIP (only when `skip_live`) | edge (down+up inside, `UI_CLICK_COOLDOWN = 0.1 s` debounce) | `"click"` @1.0 then `_finish()` | :744-747 |
+| Left-click CONTINUE/BEGIN (only when `done`) | edge | `"click"` @1.0 then `_advance()` | :748-751 |
+| Left-click anywhere else | edge (press **and** release both off-chrome) | `_primary_action()` | :754-763 |
+| Mouse move | continuous | button hover weights; writes `hovered` before `_update_buttons` sees it (§10.10) | ui.py:473-475 |
+| `ESC`, `TAB` | KEYDOWN edge | `"click"` @1.0 then `_finish()` — **skip the whole deck** | :766-768 |
+| `RETURN`, `KP_ENTER`, `SPACE`, `RIGHT`, `E` | KEYDOWN edge | `_primary_action()` | :769-771 |
+
+Nothing is held-triggered. There is no left-arrow / back / previous-card binding: **the deck only
+moves forward.** There is no gamepad path.
+
+There is **no `push_scene` and no `pop_scene` anywhere in this file** — every exit is the one
+`switch_scene` inside `_finish` (:816), plus its menu fallback (:819). Nothing is ever stacked
+over this scene either, so `transparent` / `blocks_update` never come into play in practice.
+
+`_primary_action()` (:785-793):
+
+```
+if self._fading_out: return             # the fade owns the last moment
+if not self.done:    self._complete_card()
+else:                self._click() ; self._advance()
+```
+
+`_complete_card()` (:795-802): `reveal = total`; `card_t = max(card_t, 0.70)`; `alpha = 1.0`;
+`done = True`; `_spoken = 1 << 30` (so `_speak` cannot fire a tick storm on the catch-up);
+`_play("click", 0.5)`.
+
+`_advance()` (:804-808): if `_fading_out or _finished` return; else `_fading_out = True`. It does
+**not** change `index` — `_update_card` does that when `alpha` hits 0 (:899-903).
+
+`_finish()` (:810-821): a one-shot latch.
+
+```
+if self._finished: return
+self._finished = True
+try:    self.game.switch_scene(self.next_scene, **dict(self.next_kwargs))
+except: try: self.game.switch_scene(C.SCENE_MENU)
+        except: pass
+```
+
+Transition table:
+
+| Trigger | Verb | Target | Args | `game.*` / `SaveData` written | Line |
+|---|---|---|---|---|---|
+| SKIP click, `ESC`, `TAB` | `switch_scene` | `self.next_scene` | `**self.next_kwargs` | **none** | :746, :767, :816 |
+| CONTINUE/BEGIN, `Enter`/`Space`/`→`/`E`, or a click anywhere, **on the last card** | `_advance` → 0.18 s fade → `switch_scene` | `self.next_scene` | `**self.next_kwargs` | **none** | :900-901, :816 |
+| same, **not** on the last card | `_advance` → 0.18 s fade → `_begin_card(index+1)` | *(no transition)* | — | none | :902-903 |
+| a click anywhere / confirm key while `not done` | *(no transition)* | — | — | none | :790 |
+| empty deck (first `update` tick) | `switch_scene` | `self.next_scene` | `**self.next_kwargs` | none | :842-845 |
+| `card is None` (index ran off the end) | `switch_scene` | `self.next_scene` | `**self.next_kwargs` | none | :890-893 |
+| any `switch_scene` failure | `switch_scene` | `C.SCENE_MENU` | none | none | :819 |
+
+**Writes to `game.level_index` / `mode` / `difficulty` / `last_result`: none. Writes to
+`SaveData`: none.** Grepping `self.game.` across the file yields exactly four sites —
+`switch_scene` ×2 (:816, :819), `audio.play` (:825), `particles.draw` (:966) — plus the
+`getattr(self.game, ...)` reads of `fonts`, `mouse_pos`, `level_index` and `particles`. Every
+save write and every session-state write happens in the **producer** before this scene is
+entered (mode select §2.11, victory §8.9). That is the seam: this scene is a presenter and
+nothing else. Do not let the port slip a `setStoryProgress` in here.
+
+`next_kwargs` is splatted **verbatim** into `switch_scene`, so a hand-off carrying an argument
+the target's `on_enter` does not accept raises `TypeError` inside `_finish`'s try and falls
+through to the menu (:817-819). `_ResultScene._go` has its own guard for the same hazard
+(gameover.py:494-506).
+
+---
+
+### 10.13 Audio cues, fx calls and particles
+
+All audio goes through `_play(name, volume=1.0)` → `game.audio.play(name, volume)`, swallowing
+exceptions (:823-827); `_click()` is `_play("click")` at volume 1.0 (:829-830).
+
+| Cue | Volume | Trigger | Line |
+|---|---|---|---|
+| `"click"` | `1.0` | SKIP clicked | :745 |
+| `"click"` | `1.0` | CONTINUE/BEGIN clicked | :749 |
+| `"click"` | `1.0` | `_primary_action` when the card is already `done` (click anywhere, or a confirm key) | :792 |
+| `"click"` | `1.0` | `ESC` / `TAB` | :767 |
+| `"click"` | **`0.5`** | `_complete_card` — the "skip the typing" click is deliberately quieter | :801 |
+| `"hover"` | `1.0` | a live button's `hovered` rises **without** a preceding motion event (§10.10) | :868 |
+| `"hover"` | **`0.22`** | the typewriter tick, throttled to one per `0.042 s` | :931 |
+
+Cross-check against `web/src/data/audio.json` `names` = `eat, bonus, powerup, hit, die, click,
+hover, start, levelup, win, boost, portal`: both cues this scene uses — **`click` and `hover` —
+are present**, in `names` and in `recipes`, and `missingRecipes` is empty. Nothing to flag.
+
+Screen effects and particles:
+
+| Call | Args | Trigger | Line |
+|---|---|---|---|
+| `game.particles.ambient` | `(Rect(0, 40, 1280, 680), lerp_color(theme.accent2, UI_WHITE, 0.2), dt, rate=11.0, turbulence=0.35, twinkle=0.30)` | every `update` frame | :883-885 |
+| `game.particles.draw` | `(surface)` | every `draw`, **layer 4 — under the scrim, over the stars** | :966 |
+| `draw_glow_circle` | `(640, 186, titleW*0.42, theme.accent, 0.20*alpha)` | narrative card, when a title exists | :1061-1063 |
+| `draw_glow_circle` | `(640, 186, romanW*0.62, theme.accent, (0.30 + 0.14*pulse(t,1.6))*alpha)` | chapter plate, when a numeral exists | :1080-1082 |
+| `draw_glow_circle` | `(640, ruleY + 1, half*0.35, theme.accent, 0.16*alpha)` — half = 190 or 300, so radius 66.5 or 105 | every `_rule` call | :1023-1024 |
+
+**There is no `fx.flash`, no `fx.shake`, no `fx.slowmo`, no `fx.set_theme`, no
+`particles.burst`, no `particles.ring`, no `particles.trail` and no `particles.clear` anywhere in
+this file.** The scene is unusually quiet by design — it is the calm between two loud screens.
+Note in particular that it does **not** clear the particle system on entry, so the victory
+screen's confetti and fireworks drift across the transition into the first story card. That is
+intentional continuity; do not add a `clear()`.
+
+TS mapping: `particles.ambient(rect, color, dt, { rate: 11.0, turbulence: 0.35, twinkle: 0.30 })`
+— options-object form, `web/src/gfx/particles.ts:951`; the parameter names match one for one.
+`particles.draw(surface)` becomes `game.particles.attachTo(this.root, <index>)`
+(`particles.ts:615-619`) at the layer-4 position, once, in the constructor.
+
+`draw_glow_circle(surface, x, y, r, col, intensity)` (render.py:355-362, a cached
+`glow_surface` stamped additively) ports to **`glowSprite(radius, color, intensity)` /
+`setGlow(sprite, radius, color, intensity)`** in `web/src/gfx/textures.ts:255, 272` — the port of
+`render.py`'s radial. All three call sites animate their intensity, so build the sprite once and
+call `setGlow` per frame; it only swaps the texture when the quantised radius changes.
+
+**Do not reach for `ui/glow.ts`'s `uiGlowSprite` / `setUiGlow` here.** That module is the port of
+`gfx/ui.py`'s `_glow_add` / `_blit_glow` and its own header says it is not the same primitive and
+the two must not be merged (`web/src/ui/glow.ts:1-20`): `render.py` spaces its bands by
+`sqrt(1 - i/n)` with a linear brightness ramp, the UI one spaces them linearly and ramps by
+`(1 - f) ** 2.4`. Swapping them changes the shape of the numeral halo and the rule bloom. The
+Python here imports from `gfx.render` (:55), so `gfx/textures.ts` is the faithful side.
+One deliberate difference to accept: `glow_surface` clamps intensity into `[0.02, 3.0]`
+(render.py:331), so a Python glow never quite reaches zero, while `setGlow` clamps to `[0, 1]`
+and disappears cleanly at the end of the fade. Invisible at these intensities.
+
+---
+
+### 10.14 Data dependencies, and what the TS core exposes
+
+This scene reads **no** data module directly. It has no import of `core.story`, `core.level`,
+`core.difficulty` or `core.save`; its imports are `config`, `palette`, `core.contracts`,
+`gfx.background`, `gfx.render` and `gfx.ui` (:51-56). Everything narrative arrives pre-built in
+`cards`. That is worth stating because it is the property that makes the scene reusable.
+
+| Source | Read by | Where | TS equivalent | Status |
+|---|---|---|---|---|
+| `story.json` (indirectly, through the deck) | `_pick(raw, "title"/"lines"/"speaker"/"roman"/...)` | :278-290 | `StoryBeat.title/.intro/.outro/.speaker` (`web/src/core/story.ts:33-59`), `StoryCard.title/.lines/.speaker` (:68-75), `Chapter.title/.blurb/.number` (:80-99) — all present | ✅ |
+| `Chapter.roman` | the plate promotion | :284-286 | **`roman()` is a method** in TS (interface `story.ts:92`, impl `ChapterRecord` :113-118), a `@property` in Python (`snake/core/story.py:127-130`) | ⛔ **gap V1** — resolved in §10.3.4 |
+| `Chapter.chapter_number` | the integer fallback | :287-290 | no such field either side; TS `Chapter.number` is not probed. Dead arm for the shipped content; keep it for dicts | n/a |
+| `palette` | `P.Theme`, `theme_for_level`, `lerp_color`, `shade`, `UI_WHITE`, `theme.accent/.accent2/.text/.text_dim/.bg_bottom/.bg_style` | throughout | `Theme` (:146-172), `themeForLevel` (`core/palette.ts:334`; §2.13's data table cites 261 — that is the stale one, §8.12 already has 334), `lerpColor` (:36), `shade` (:46), `UI_WHITE` (:360), `theme.accent/.accent2/.text/.textDim/.bgBottom/.bgStyle` (:149-169) | ✅ (camelCase shim) |
+| `config` | `WINDOW_W/H`, `UI_BUTTON_W/H`, `MAX_DT`, `SCENE_MENU`, `SCENE_GAME` | :70-81, :837 | `core/config.ts:54-55` (window), `:58` (`MAX_DT`), `:145-146` (`UI_BUTTON_W/H`); `SCENES` in `app/Scene.ts:65-76` | ✅ |
+| `core.contracts` | `clamp`, `ease_out_cubic`, `pulse` | :53 | `clamp`, `easeOutCubic`, `pulse` (`core/mathx.ts:53, 74`) | ✅ |
+| `gfx.background` | `make_background(style, theme, Rect(0,0,1280,720))` | :612-613 | `makeBackground(style, theme, rect, renderer)` (`web/src/gfx/bg/index.ts:81-86`); `.update(dt, focus)` matches (`Background.ts:242`) | ✅ (extra `renderer` arg) |
+| `gfx.render` | `draw_glow_circle` (render.py:355-362) | :55 | `glowSprite` / `setGlow` (`gfx/textures.ts:255, 272`) — **not** `ui/glow.ts`, see §10.13 | ✅ |
+| `gfx.ui` | `Button`, `draw_text` | :56 | `ButtonState` (`ui/Button.ts:343`) / `Button` (:425), `Label` (`ui/text.ts:116`) / `drawText` (:221) | ✅ |
+| `game.fonts` | `fonts.get(size, bold)` and `fonts.display_at(size)` (`gfx/fonts.py:98, 102`) | :409-417 | `game.fonts.get(size, bold)` (`gfx/fonts.ts:234`), `game.fonts.displayAt(size)` (:239) — **same call signatures**; the TS pair returns a `TextStyleOptions` descriptor rather than a font object, which is what `Label`/`measureWidth`/`fit` all take | ✅ |
+| `game.mouse_pos` | star parallax, button hit-tests, background focus | :851, :859, :988 | `game.pointer.x/.y` (`app/Game.ts:109`) | ✅ shim |
+| `game.particles` | `ambient`, `draw` | :880-885, :966 | `game.particles` (`app/Game.ts:88`) | ✅ |
+| `game.audio` | `play(name, volume)` | :825 | the `Audio` instance built at `main.ts:52` and passed into each scene at registration (`main.ts:57-65`, e.g. `new HelpScene(g, sound)` :61) | ✅ |
+| `game.level_index` | theme fallback only | :602 | `game.levelIndex` (`app/Game.ts:137`) | ✅ |
+| `game.switch_scene(name, **kwargs)` | hand-off | :816 | `game.switchScene(key, args?)` (`app/Game.ts:254`) — an **object**, not kwargs | ✅ shim |
+| `SaveData` | — | — | — | **not used** |
+| `levels.json` / `difficulty.json` | — | — | — | **not used** |
+
+Two concrete gaps beyond V1:
+
+* **Gap S1 — the hand-off key name.** Python's `next_kwargs = {"level_index": nxt}` is splatted
+  into `GameplayScene.on_enter(level_index=...)`. The ported `GameplayScene.onEnter` reads
+  **`args["level"]`**, not `args["levelIndex"]` (`web/src/scenes/GameplayScene.ts:147-148`). The
+  story hand-off will therefore silently start the wrong level unless one side moves. Fix at the
+  gameplay end (accept `levelIndex`, keeping `level` as an alias) rather than translating inside
+  the story scene, so the producers can keep writing one name.
+* **Gap S2 — `Label`'s shadow alpha is independent of `setAlpha`** (`ui/text.ts:196-199`); the
+  story scene fades body and shadow together. Use the container alpha, §10.9.4. No change to the
+  kit required, but it is a trap.
+
+**How progression reaches `SaveData`** — for the record, since this section is where a reader
+will look for it. Nothing here writes it. The chain is:
+
+1. `GameplayScene._finish(won=True)` writes `record` / `unlock_through` / `set_story_progress` /
+   `set_story_complete` / `save()` (`snake/scenes/gameplay.py:1087-1108`; integration.md §6.1).
+2. `VictoryScene._story_cards()` writes `mark_beat_seen(level_index)` and, on the non-final path,
+   `mark_beat_seen(next_index)` — **before** it decides whether to include the next intro, which
+   is why the card list is built before the saves (gameover.py:949, :971; §8.9).
+3. `VictoryScene._story_continue()` writes `set_story_complete(True)` or `set_story_progress(nxt)`
+   and then `flush()` (gameover.py:980-993).
+4. `ModeSelectScene._story_cards(index)` writes `mark_beat_seen(PROLOGUE_BEAT = 100)` the first
+   time the prologue is shown (mode_select.py:66, :554; §2.11).
+5. Only then does `StoryScene.on_enter` run. It reads none of it.
+
+TS coverage of all five: `record` (`core/save.ts:783`) / `unlockThrough` (:758) /
+`setStoryProgress` (:901) /
+`setStoryComplete` (:911) / `beatSeen` (:920) / `markBeatSeen` (:930) / `flush` (:655) — all
+present. `PROLOGUE_BEAT = 100` is a **mode-select-local constant** (mode_select.py:66) with no TS
+home yet; give it one when that scene is ported.
+
+---
+
+### 10.15 Capture cross-check
+
+Both captures are 1280 × 720, i.e. exactly the design space, and both come from
+`tools/screenshot.py:249-265`:
+`switch_scene("story", cards=[S.get_chapter(3), S.get_beat(3)], next_scene=C.SCENE_GAME,
+next_kwargs={"level_index": 3})` — **no `theme=`**, so §10.2 step 5 applies and the theme is
+`theme_for_level(game.level_index)` with `game.level_index` still `0`: **Neon Grid**
+(`accent = (0, 236, 255)`, `accent2 = (255, 60, 190)`, `bg_style = "grid"`, palette.py:99-107).
+Nothing writes `game.level_index` before this point in the script — the only two writers are
+`ModeSelectScene` (:580) and `LevelSelectScene` (:553), both on a click the harness never makes,
+and `Game.__init__` seeds it `0` (main.py:110). Both frames are captured with `done == True`
+(`wait_for_story`, screenshot.py:379-387).
+
+**`captures/05-story-chapter.png`** — the chapter plate, deck position 1 of 2:
+
+| Element | On screen | Matches spec |
+|---|---|---|
+| `C H A P T E R` letter-spaced, dim grey-blue, centred, top ≈ 100 | ✅ | literal at :1074, `_CH_LABEL_Y = 96` + `lift*0.4` (0 at rest), `get(16)`, `shade(text_dim, 1.0)` at full alpha |
+| Huge cyan `II`, centred, ≈ y 120-215 | ✅ | `_CH_ROMAN_Y = 120`, `display_at(112)` (measured height 112), `lerp(accent, UI_WHITE, 0.30)`; `get_chapter(3).roman` = `"II"` |
+| Bright halo behind the numeral | ✅ | `draw_glow_circle(640, 186, 63*0.62 = 39, accent, breathe*alpha)` |
+| Faint horizontal rule ≈ y 267, spanning ≈ x 340-940, brightest in the middle | ✅ | `_CH_RULE_Y = 268`, `half = 300` → 340..940, 2 px, brightest at the midpoint (`power` falloff, §10.8) |
+| `The Working Layers` cyan-white, centred, ≈ y 290-345 | ✅ | `_CH_TITLE_Y = 290`, `display_at(58)` (516 px wide ≤ 940, no shrink), `lerp(accent, UI_WHITE, 0.55)` |
+| Two body lines at ≈ y 400 and ≈ y 450 | ✅ | `_CH_LINES_Y = 392`, `_CH_LINE_STEP = 50` → tops 392 / 442, `get(25)`, the chapter's two `blurb` lines verbatim |
+| `CARD 1 OF 2` right-aligned at x ≈ 1240, y ≈ 35-47 | ✅ | `(1280-40, 30)`, `align="right"`, `get(14)` |
+| Two pips at ≈ (1228, 58) and (1240, 58), the left one larger and cyan | ✅ | pitch 12, right 1240, r = 3 + `lerp(accent, UI_WHITE, 0.4)` for `i == index = 0`; r = 2 + `shade(dim, 0.3)` for the unvisited one |
+| `CONTINUE` primary button, x ≈ 488-792, y ≈ 613-670 | ✅ | `_CONTINUE_RECT = (490, 614, 300, 58)`; label `CONTINUE` because this is **not** the last card |
+| `SKIP` ghost button, x ≈ 1021-1170, y ≈ 556-600 | ✅ | `_SKIP_RECT = (1020, 556, 150, 44)`, `skip_live` (2 cards) |
+| No `CLICK TO REVEAL` bottom-left | ✅ | `done == True` suppresses it (:1146) |
+
+**`captures/06-story-card.png`** — the narrative card, deck position 2 of 2:
+
+| Element | On screen | Matches spec |
+|---|---|---|
+| `THERMAL CHANNEL` in pink, small, centred, ≈ y 127-140 | ✅ | `_SPEAKER_Y = 122`, `card.speaker.upper()` from `get_beat(3).speaker = "thermal channel"`, `get(15)`, `lerp(accent2, UI_WHITE, 0.2)` ≈ `(252, 97, 203)` |
+| `Coronal Lanes` cyan-white, centred, ≈ y 152-215 | ✅ | `_TITLE_Y = 152`, `display_at(62)` (407 px wide, no shrink) |
+| Halo behind the title | ✅ | `draw_glow_circle(640, 186, 407*0.42 = 171, accent, 0.20)` |
+| Faint rule ≈ y 245, spanning ≈ x 450-830 | ✅ | `_RULE_Y = 246`, `half = 190` → 450..830 — **visibly shorter than the chapter plate's**, exactly as specified |
+| Four body lines at ≈ y 305 / 351 / 397 / 443 | ✅ | `_LINES_Y = 298`, `_LINE_STEP = 46` → tops 298 / 344 / 390 / 436; the glyph tops sit ~7 px below the box top |
+| The four lines are `get_beat(3).intro`, **not** `.outro` | ✅ | `_pick` probes `intro` before `outro` (:279-280) — the §10.3.2 consequence, confirmed on screen |
+| `CARD 2 OF 2`; the **right** pip is the large cyan one | ✅ | `index = 1` |
+| The primary button reads **`BEGIN`**, not `CONTINUE` | ✅ | `_begin_card`: last card **and** `next_scene == C.SCENE_GAME` (:671-672) |
+| No speaker/rule differences from card 1 other than the above | ✅ | |
+
+**Everything on screen I cannot trace to a line of `story_scene.py`**, and where it belongs
+instead:
+
+| On screen | Owner |
+|---|---|
+| `60.0 fps` top-right | shell debug readout (`main.py`), not the scene |
+| the small circular cursor reticle over the CONTINUE button | `draw_cursor` (ui.py:593), shell-level; the harness parks the mouse at (640, 643) |
+| the perspective grid, the teal mountain silhouettes, the magenta horizon streaks, and the slatted "sun" behind the numeral in capture 05 | the **`grid`** background (`gfx/background.py`), built by `make_background` at :612. The slats sitting behind the `II` are the background's sun motif, not scene chrome — nothing in `_draw_chapter` draws horizontal bars |
+| the **full-width** horizontal lines at y ≈ 235 and y ≈ 490 in both frames | the same grid's receding laterals. Easy to mistake for `_rule`, which is the *short*, centre-bright, accent→accent2 line at y 246 (half 190) or y 268 (half 300) and never reaches the frame edges |
+| the pink/white pinpricks scattered over the whole frame | two sources, both this scene: the 134 parallax stars (`_draw_stars`) and the ambient motes (`particles.ambient`, `lerp(accent2, UI_WHITE, 0.2)` — which is why they read pink) |
+| the overall darkening toward the corners and the mid-frame band | `_overlay_surface`; the band's soft top edge is visible as a faint horizontal seam at y ≈ 58 and its bottom ramp around y ≈ 451-604 |
+| the bloom around the numeral, the title and the button rims, and the barrel/bezel darkening at the extreme corners | the post chain (`gfx/effects.py`), applied after `draw` returns |
+| the button's rounded fill, rim, idle shimmer and hover lift | `Button.draw` (ui.py:502), owned by `ui.md` |
+
+Nothing else appears in either frame. In particular there is **no panel** behind the text in
+either capture — the scrim band is doing that job, which is the design note at :341-343.
+
+---
+
+### 10.16 Suggested TS shape
+
+```ts
+export class StoryScene extends Scene {
+  readonly root = new Container();
+  // layers, added once, in draw order (§10.11)
+  private bgLayer   = new Container();   // 1 background (overscan)
+  private starLayer = new Graphics();    // 3 one Graphics, redrawn per frame: 134 1-2px rects
+  //                                      4 game.particles.attachTo(this.root, 3)
+  private scrim     = new Sprite();      // 5 cached texture, rebuilt on resize
+  private cardLayer = new Container();   // 6 kicker / glow / numeral / title / rule / lines
+  private chrome    = new Container();   // 7 counter, pips, hint, buttons
+}
+```
+
+Points where a literal transcription goes wrong, collected:
+
+1. **`onEnter` must reset everything**, including the fields Python leaves stale on the
+   empty-deck path (§10.5).
+2. **Drain `game.uiEvents` before `button.update`**, and only feed the buttons that are live
+   (§10.10) — that ordering is what suppresses the hover cue on mouse-in.
+3. **Rebuild the background on a theme change, not a `bg_style` change** (§10.5 item 3).
+4. **The chapter duck-type is `typeof card.roman === "function"`** (§10.3.4).
+5. **Mask the line, do not re-render the prefix** (§10.9.4).
+6. **Fade the `Label` container, not `setAlpha`** (§10.9.4).
+7. `switchScene(this.nextScene, { ...this.nextKwargs })` — an object, not kwargs; and see
+   gap S1 about the `level` / `levelIndex` key.
+8. `destroy()` the background in `onExit()` (§10.5 item 4), and destroy the scrim texture in
+   `onResize()`.
+9. The star field and the scrim both want the overscan rect, not the design box (§10.11).
+10. Everything on this screen takes **real dt**; never read `game.post.fx.timeScale()` here.
+11. **Glow with `gfx/textures.ts::setGlow`, not `ui/glow.ts::setUiGlow`** — different falloff,
+    and the kit's own header forbids substituting one for the other (§10.13).
+12. **The chrome layer must not inherit the card's alpha** (§10.8) — counter, pips, hint and
+    both buttons stay at full strength through both fades.
+13. Use `FontBook.fit(...)` for the title ladder instead of re-implementing it (§10.8.1).
+
+Invariants worth asserting cheaply in a dev build:
+
+* `cards.length <= 24`, and each card's display list `<= 4` lines (shipped max; the code allows 9).
+* No shipped body line wraps and no shipped title shrinks (§10.9.1).
+* `total >= 0` and `reveal <= total` at all times.
+* `_finish` fires at most once per entry (`finished` latch).
+* The scene performs **zero** `SaveData` calls — assert it with a spy in the port's test.
+
+---
+
+### 10.17 Gaps and open questions
+
+* **V1 (resolved here).** `Chapter.roman` is a method in TS (`core/story.ts:92`, impl :113) and
+  a `@property` in Python (`snake/core/story.py:127-130`). The normaliser must call it; §10.3.4
+  gives the code and says why it goes there rather than in the two producers. Both producers hand
+  over raw `Chapter` objects, so this is the single point of failure for the chapter plate — if
+  it regresses, the plate degrades silently into an ordinary card rather than throwing.
+* **S1.** `next_kwargs = {"level_index": n}` vs `GameplayScene.onEnter`'s `args["level"]`
+  (`web/src/scenes/GameplayScene.ts:147-148`). Every story hand-off to gameplay depends on it.
+  Decide the canonical key when the scene-porting task starts; recommend `levelIndex` with
+  `level` kept as an alias.
+* **S2.** `Label.setAlpha` does not fade the shadow (`ui/text.ts:196-199`; the shadow's fixed
+  `TEXT_SHADOW_ALPHA = 150` is set at :36 and applied at :140). Use the container alpha. Consider
+  adding a `setGroupAlpha` to the kit if other scenes hit the same thing.
+* **S3.** The glow primitive. `docs/port/render.md:144` proposed `stampGlow(...)`; what actually
+  shipped is `glowSprite` / `setGlow` (`gfx/textures.ts:255, 272`). Name the shipped pair
+  (§10.13), and do not let the similarly-named `ui/glow.ts` pair drift in by autocomplete.
+* **Q-S1.** Overscan policy for the scrim/vignette and the star field (§10.11). The
+  recommendation there is a proposal, not a settled decision — it is the only place this scene
+  has to invent something the Python does not specify, because Python has no overscan.
+* **Q-S2.** `_TICK_GAP`'s tick uses the `"hover"` cue at volume 0.22 as a typewriter sound. It is
+  a reuse, not a dedicated cue. If the audio engine's `hover` recipe changes character, this
+  screen changes character with it. Worth a dedicated `type` cue eventually; out of scope for
+  a parity port.
+* **Documentation drift (no action).** The module docstring's "four other scenes drive it"
+  (:15) overstates the graph — only mode select and victory do (§10.1). `settings.py:288`'s
+  allow-list entry for `SCENE_STORY` is unreachable.
+* **`"Mill. Road"` → roman `"MILL"`** (§10.3.3). A real false positive in `_split_marker`,
+  unreachable with the shipped titles. Port it verbatim; note it; do not fix it unilaterally,
+  because a "fix" changes which cards become plates.

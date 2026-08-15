@@ -14,6 +14,7 @@ import { GameplayScene } from "./scenes/GameplayScene";
 import { PauseScene } from "./scenes/PauseScene";
 import { HelpScene } from "./scenes/HelpScene";
 import { MenuScene } from "./scenes/MenuScene";
+import { ModeSelectScene } from "./scenes/ModeSelectScene";
 import { PreviewScene } from "./scenes/PreviewScene";
 import { UiKitScene } from "./scenes/UiKitScene";
 
@@ -59,6 +60,7 @@ async function main(): Promise<void> {
   game.registerScene("pause", (g) => new PauseScene(g, save, sound));
   game.registerScene("menu", (g) => new MenuScene(g, save, sound));
   game.registerScene("help", (g) => new HelpScene(g, sound));
+  game.registerScene("mode", (g) => new ModeSelectScene(g, save, sound));
   // Development only: reachable by name from the screenshot harness, never
   // linked to from the game itself.
   game.registerScene("preview", (g) => new PreviewScene(g));

@@ -283,7 +283,9 @@ export class Game {
     if (this.stack.length <= 1) return;
     const s = this.stack.pop()!;
     s.onExit();
-    this.world.removeChild(s.root);
+    // Scene roots live under the post chain, not directly under the world -
+    // removing from the wrong parent silently leaves the overlay on screen.
+    this.post.scene.removeChild(s.root);
   }
 
   /** Scene keys that have been registered; used by tests. */

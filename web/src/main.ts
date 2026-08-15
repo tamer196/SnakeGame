@@ -11,6 +11,7 @@ import { SaveData } from "./core/save";
 import { attachInput } from "./input/Input";
 import { BootScene } from "./scenes/BootScene";
 import { GameplayScene } from "./scenes/GameplayScene";
+import { PauseScene } from "./scenes/PauseScene";
 import { PreviewScene } from "./scenes/PreviewScene";
 import { UiKitScene } from "./scenes/UiKitScene";
 
@@ -53,6 +54,7 @@ async function main(): Promise<void> {
   // keeps the dependency arrow pointing one way and avoids import cycles.
   game.registerScene("boot", (g) => new BootScene(g));
   game.registerScene("game", (g) => new GameplayScene(g, save, sound));
+  game.registerScene("pause", (g) => new PauseScene(g, save, sound));
   // Development only: reachable by name from the screenshot harness, never
   // linked to from the game itself.
   game.registerScene("preview", (g) => new PreviewScene(g));

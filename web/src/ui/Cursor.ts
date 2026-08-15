@@ -41,7 +41,7 @@ import {
   type RGB,
   type Theme,
 } from "../core/palette";
-import { uiGlowSprite, setUiGlow } from "./glow";
+import { arcPath, uiGlowSprite, setUiGlow } from "./glow";
 
 /** Trail samples below this fraction are skipped. ui.py:608 */
 const TRAIL_MIN_F = 0.08;
@@ -211,7 +211,7 @@ export class Cursor {
     for (let k = 0; k < 3; k++) {
       const a0 = spin + (k * Math.PI * 2) / 3;
       const a1 = a0 + TICK_SWEEP;
-      g.arc(mx, my, baseR, -a1, -a0).stroke({ color: tickCol, width: 2 });
+      arcPath(g, mx, my, baseR, -a1, -a0).stroke({ color: tickCol, width: 2 });
     }
 
     // A faint near-complete inner ring, spinning the other way. Note the rect
@@ -219,7 +219,7 @@ export class Cursor {
     // barely half the tick ring, not 1.1x it.
     const innerR = baseR * 0.55;
     const s0 = -spin * 0.7;
-    g.arc(mx, my, innerR, -(s0 + Math.PI * 2 * 0.999), -s0).stroke({
+    arcPath(g, mx, my, innerR, -(s0 + Math.PI * 2 * 0.999), -s0).stroke({
       color: toHex(shade(accent2, 0.6)),
       width: 1,
     });

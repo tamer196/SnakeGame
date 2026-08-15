@@ -19,7 +19,7 @@
  * Python's cache key snapped it to 0.1.
  */
 
-import { Sprite, type Texture } from "pixi.js";
+import { Sprite, type Graphics, type Texture } from "pixi.js";
 
 import { toHex, type RGB } from "../core/palette";
 import { canvasTexture, clearToBlack, context2d, createCanvas } from "../gfx/textures";
@@ -34,6 +34,30 @@ export const UI_GLOW_MIN_STEPS = 5;
 export const UI_GLOW_MAX_STEPS = 26;
 /** Below this, `_blit_glow` draws nothing at all. ui.py:173 */
 export const UI_GLOW_EPSILON = 0.01;
+
+/**
+ * Start an arc as its own sub-path.
+ *
+ * `Graphics.arc` *continues* the current path, so without an explicit `moveTo`
+ * it draws a leader line from wherever the pen happens to be - usually the
+ * origin - to the arc's first point. That shows up as a stray diagonal across
+ * the whole screen, which is exactly what it did the first time the help
+ * screen's magnet glyph was drawn.
+ *
+ * Angles are screen-space (y down, clockwise). Callers porting a
+ * `pygame.draw.arc` must negate theirs first: pygame measures in a y-up frame.
+ */
+export function arcPath(
+  g: Graphics,
+  cx: number,
+  cy: number,
+  r: number,
+  a0: number,
+  a1: number,
+): Graphics {
+  g.moveTo(cx + Math.cos(a0) * r, cy + Math.sin(a0) * r);
+  return g.arc(cx, cy, r, a0, a1);
+}
 
 const cache = new Map<number, Texture>();
 

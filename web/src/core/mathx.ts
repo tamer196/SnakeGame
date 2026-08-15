@@ -132,3 +132,31 @@ export function rectOverlapsCircle(
   const dy = cy - ny;
   return dx * dx + dy * dy <= rad * rad;
 }
+
+/**
+ * Round to `digits` decimals the way Python's `format(x, ".Nf")` does.
+ *
+ * Python rounds a **tie to even**; JavaScript's `Math.round` and `toFixed`
+ * both round a tie away from zero. That is not academic here: the power-up
+ * table stores `slow` at 6.5 seconds, and the help screen prints it as "6s" in
+ * the Python and would print "7s" from `toFixed(0)`. Any `:.Nf` in the Python
+ * that can land on an exact half needs this.
+ *
+ * Only exact ties differ, so everything else agrees with `toFixed` bit for bit.
+ */
+export function formatFixed(value: number, digits = 0): string {
+  if (!Number.isFinite(value)) return String(value);
+  const scale = Math.pow(10, digits);
+  const scaled = value * scale;
+  const floor = Math.floor(scaled);
+  const diff = scaled - floor;
+  let n: number;
+  if (diff > 0.5) n = floor + 1;
+  else if (diff < 0.5) n = floor;
+  // An exact tie goes to the even neighbour.
+  else n = floor % 2 === 0 ? floor : floor + 1;
+  const out = (n / scale).toFixed(digits);
+  // Python keeps the sign when a negative rounds to zero ("-0.5" -> "-0");
+  // JavaScript's toFixed drops it, because -0 and 0 print alike.
+  return n === 0 && value < 0 ? `-${out}` : out;
+}

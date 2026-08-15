@@ -8,9 +8,11 @@
  */
 
 import { describe, expect, it } from "vitest";
+import type { TextStyleOptions } from "pixi.js";
 
 import type { FontBook } from "../src/gfx/fonts";
 import { THEMES, UI_DIM, lerpColor, shade } from "../src/core/palette";
+import { formatFixed } from "../src/core/mathx";
 import { mute, muteTheme } from "../src/ui/muteTheme";
 import { clearWrapCache, wrapCacheSize, wrapText } from "../src/ui/wrap";
 
@@ -22,7 +24,7 @@ const fakeFonts = {
   measureWidth: (_style: unknown, text: string) => text.length,
 } as unknown as FontBook;
 
-const style = { fontFamily: "test", fontSize: 10, fontWeight: "400" };
+const style: TextStyleOptions = { fontFamily: "test", fontSize: 10, fontWeight: "400" };
 
 describe("wrapText", () => {
   it("wraps greedily at the width", () => {
@@ -128,5 +130,29 @@ describe("muteTheme", () => {
     const m = muteTheme(theme);
     expect(m.name).toBe(theme.name);
     expect(m.bgStyle).toBe(theme.bgStyle);
+  });
+});
+
+describe("formatFixed", () => {
+  it("rounds a tie to even, as Python's :.Nf does", () => {
+    // The power-up table stores `slow` at 6.5 s. Python prints "6"; toFixed
+    // prints "7", and the help screen showed exactly that discrepancy.
+    expect(formatFixed(6.5, 0)).toBe("6");
+    expect(formatFixed(7.5, 0)).toBe("8");
+    expect(formatFixed(0.5, 0)).toBe("0");
+    expect(formatFixed(1.5, 0)).toBe("2");
+    expect(formatFixed(-0.5, 0)).toBe("-0");
+  });
+
+  it("agrees with toFixed everywhere else", () => {
+    for (const v of [0, 1, 6.4, 6.6, 12, 8.0, 10.25, 99.999]) {
+      expect(formatFixed(v, 0)).toBe(v.toFixed(0));
+    }
+  });
+
+  it("handles more decimals and non-finite input", () => {
+    expect(formatFixed(1.25, 1)).toBe("1.2");
+    expect(formatFixed(1.35, 1)).toBe("1.4");
+    expect(formatFixed(Number.NaN, 0)).toBe("NaN");
   });
 });

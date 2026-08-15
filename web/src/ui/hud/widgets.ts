@@ -32,7 +32,7 @@ import {
 import { POWERUP_TYPES, type PowerUpKind } from "../../core/powerups";
 import { canvasTexture, context2d, createCanvas, cssRgb } from "../../gfx/textures";
 import type { FontBook } from "../../gfx/fonts";
-import { setUiGlow, uiGlowSprite } from "../glow";
+import { arcPath, setUiGlow, uiGlowSprite } from "../glow";
 import { Label } from "../text";
 
 // ---------------------------------------------------------------------------
@@ -199,7 +199,7 @@ export function drawEffectGlyph(
       // arc is y-up, so 0..pi there is the *lower* half on screen.
       const width = Math.max(2, Math.trunc(r * 0.4));
       const boxCy = cy + r * 0.3;
-      g.arc(cx, boxCy, r, Math.PI, Math.PI * 2).stroke({ color: c, width });
+      arcPath(g, cx, boxCy, r, Math.PI, Math.PI * 2).stroke({ color: c, width });
       for (const sx of [-1, 1]) {
         const x0 = cx + sx * r * 0.78;
         g.moveTo(x0, boxCy)

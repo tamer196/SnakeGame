@@ -33,6 +33,14 @@ export const CHAPTER_SIZE: number = 3;
 export interface StoryBeat {
   /** Zero-based level this beat belongs to (matches `LEVELS[levelIndex]`). */
   readonly levelIndex: number;
+  /**
+   * One-based level number, for display - Python's `StoryBeat.number`.
+   *
+   * Materialised rather than derived at the call site because three screens
+   * format it, and `levelIndex + 1` scattered across them is one off-by-one
+   * waiting to happen.
+   */
+  readonly number: number;
   /** One-based chapter number, 1..4. */
   readonly chapter: number;
   /**
@@ -190,6 +198,7 @@ function cardOf(v: RawCard | undefined): StoryCard {
 /** The twelve beats, in level order. */
 export const BEATS: readonly StoryBeat[] = (RAW.beats ?? []).map((b, i) => ({
   levelIndex: intOf(b.level_index, i),
+  number: intOf(b.level_index, i) + 1,
   chapter: intOf(b.chapter, Math.floor(i / CHAPTER_SIZE) + 1),
   chapterTitle: textOf(b.chapter_title),
   title: textOf(b.title),
@@ -225,6 +234,7 @@ export const EPILOGUE: StoryCard = cardOf(RAW.epilogue);
 /** The beat handed back when the table is empty; keeps every accessor total. */
 const EMPTY_BEAT: StoryBeat = {
   levelIndex: 0,
+  number: 1,
   chapter: 1,
   chapterTitle: "",
   title: "",

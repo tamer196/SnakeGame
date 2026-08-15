@@ -45,6 +45,8 @@ function str(key: string, fallback: string): string {
 // ---------------------------------------------------------------------------
 export const GAME_TITLE = str("GAME_TITLE", "NEON SERPENT");
 export const GAME_SUBTITLE = str("GAME_SUBTITLE", "a mouse-driven arcade odyssey");
+/** Shown in the menu's footer stamp. */
+export const VERSION = str("VERSION", "1.0.0");
 
 // ---------------------------------------------------------------------------
 // The virtual canvas everything is authored against

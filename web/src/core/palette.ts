@@ -171,6 +171,79 @@ export interface Theme {
   readonly hex: ThemeHex;
 }
 
+/**
+ * A synthetic theme part-way between two real ones - the menu's carousel.
+ *
+ * `name` and `bgStyle` are not interpolatable, so they come from whichever side
+ * is dominant; every colour is a straight lerp. The `hex` mirror is rebuilt,
+ * which is not optional: the renderer tints from it, so a blended theme with a
+ * stale mirror would fade the text and leave the graphics on the old palette.
+ */
+export function blendThemes(a: Theme, b: Theme, t: number): Theme {
+  if (t <= 0.001) return a;
+  if (t >= 0.999) return b;
+  const lead = t >= 0.5 ? b : a;
+  const mix = (k: keyof Pick<
+    Theme,
+    | "bgTop"
+    | "bgBottom"
+    | "grid"
+    | "accent"
+    | "accent2"
+    | "snakeHead"
+    | "snakeA"
+    | "snakeB"
+    | "food"
+    | "hazard"
+    | "text"
+    | "textDim"
+  >): RGB => lerpColor(a[k], b[k], t);
+
+  const bgTop = mix("bgTop");
+  const bgBottom = mix("bgBottom");
+  const grid = mix("grid");
+  const accent = mix("accent");
+  const accent2 = mix("accent2");
+  const snakeHead = mix("snakeHead");
+  const snakeA = mix("snakeA");
+  const snakeB = mix("snakeB");
+  const food = mix("food");
+  const hazard = mix("hazard");
+  const text = mix("text");
+  const textDim = mix("textDim");
+
+  return {
+    name: lead.name,
+    bgStyle: lead.bgStyle,
+    bgTop,
+    bgBottom,
+    grid,
+    accent,
+    accent2,
+    snakeHead,
+    snakeA,
+    snakeB,
+    food,
+    hazard,
+    text,
+    textDim,
+    hex: {
+      bgTop: toHex(bgTop),
+      bgBottom: toHex(bgBottom),
+      grid: toHex(grid),
+      accent: toHex(accent),
+      accent2: toHex(accent2),
+      snakeHead: toHex(snakeHead),
+      snakeA: toHex(snakeA),
+      snakeB: toHex(snakeB),
+      food: toHex(food),
+      hazard: toHex(hazard),
+      text: toHex(text),
+      textDim: toHex(textDim),
+    },
+  };
+}
+
 /** Colour of a body segment: `t01` = 0 at the head, 1 at the tail tip. */
 export function bodyAt(theme: Theme, t01: number): RGB {
   return lerpColor(theme.snakeA, theme.snakeB, t01);

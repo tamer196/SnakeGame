@@ -12,6 +12,7 @@
 import { Application, Container, Ticker } from "pixi.js";
 
 import * as C from "../core/config";
+import { FontBook, fontsReady } from "../gfx/fonts";
 import { ParticleSystem } from "../gfx/particles";
 import { PostChain } from "../gfx/post";
 import type { InputManager } from "../input/Input";
@@ -58,6 +59,15 @@ export class Game {
    */
   readonly particles = new ParticleSystem();
   readonly post = new PostChain();
+
+  /**
+   * The named font ladder, mirroring `main.py:98`.
+   *
+   * Owned by the shell rather than threaded through every draw call as the
+   * Python does, because in Pixi a style is set once when a `Text` is built
+   * rather than passed at paint time.
+   */
+  readonly fonts = new FontBook();
 
   readonly pointer: PointerState = {
     x: C.WINDOW_W * 0.5,
@@ -120,6 +130,12 @@ export class Game {
     });
     mount.appendChild(this.app.canvas);
 
+    // A Text built before its face has resolved measures against a fallback,
+    // and Pixi caches that measurement with the raster - so a mis-tiered
+    // headline stays wrong until its string changes. Resolves immediately when
+    // there is nothing to load.
+    await fontsReady();
+
     this.app.stage.addChild(this.world);
     this.app.stage.addChild(this.overlay);
     // Scenes live inside the post chain, so every filter and the shake offset
@@ -149,6 +165,11 @@ export class Game {
 
     this.world.scale.set(this.viewport.scale);
     this.world.position.set(this.viewport.offsetX, this.viewport.offsetY);
+
+    // Text rasterises in design pixels and is then magnified by the world
+    // transform, so on a large window it needs to be built at more than 1:1 or
+    // every label goes soft. Scenes copy this onto each `Text.resolution`.
+    this.fonts.setResolution(this.viewport.scale * (this.app.renderer?.resolution ?? 1));
 
     // The post chain frames the whole screen in design units, not just the
     // 1280x720 box: on a wide phone the bars either side are part of the

@@ -23,7 +23,7 @@
  * {@link FrameClocks} pair so a call site cannot quietly use the wrong one.
  */
 
-import { Container, Graphics, Text, type TextStyleOptions } from "pixi.js";
+import { Container, Graphics, Text } from "pixi.js";
 
 import * as C from "../core/config";
 import type { Game } from "../app/Game";
@@ -55,19 +55,10 @@ interface PopupView {
   bound: Popup | null;
 }
 
-const POPUP_STYLE: TextStyleOptions = {
-  fontFamily: "system-ui, sans-serif",
-  fontSize: 20,
-  fontWeight: "700",
-  fill: 0xffffff,
-  letterSpacing: 1,
-};
-
-const POPUP_STYLE_BIG: TextStyleOptions = {
-  ...POPUP_STYLE,
-  fontSize: 30,
-  letterSpacing: 2,
-};
+// Popup text comes straight from the ladder: `gameplay.py:1293` picks
+// `fonts.h2 if pop.big else fonts.small`. The placeholder these replaced was
+// wrong three ways - 20 px instead of 17, weight 700 instead of Segoe UI
+// Light's 300, and a letterSpacing the Python never asks for.
 
 export class GameplayScene extends Scene implements GameplayPresenter {
   readonly root = new Container();
@@ -231,10 +222,11 @@ export class GameplayScene extends Scene implements GameplayPresenter {
       let view = this.popupViews[i];
       if (!view) {
         view = {
-          text: new Text({ text: "", style: { ...POPUP_STYLE } }),
+          text: new Text({ text: "", style: this.game.fonts.small }),
           bound: null,
         };
         view.text.anchor.set(0.5);
+        view.text.resolution = this.game.fonts.resolution;
         this.popupLayer.addChild(view.text);
         this.popupViews.push(view);
       }
@@ -243,7 +235,7 @@ export class GameplayScene extends Scene implements GameplayPresenter {
       // cost worth not copying.
       if (view.bound !== p) {
         view.bound = p;
-        view.text.style = { ...(p.big ? POPUP_STYLE_BIG : POPUP_STYLE) };
+        view.text.style = p.big ? this.game.fonts.h2 : this.game.fonts.small;
         view.text.text = p.text;
         view.text.tint = toHex(p.color);
       }

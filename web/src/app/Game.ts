@@ -133,6 +133,17 @@ export class Game {
   running = false;
   headless = false;
 
+  /**
+   * Windowed or fullscreen.
+   *
+   * The Python cycles windowed / borderless / fullscreen; a browser has only
+   * the Fullscreen API, and only from a user gesture, so borderless collapses
+   * into fullscreen here. The field is the *intent* - {@link syncDisplayMode}
+   * keeps it honest when the user leaves fullscreen with Escape, which fires no
+   * click for us to hang off.
+   */
+  displayMode: "windowed" | "fullscreen" = "windowed";
+
   /** Session state shared between scenes. */
   levelIndex = 0;
   mode: string = C.DEFAULT_MODE;
@@ -194,10 +205,42 @@ export class Game {
     this.applyResize();
     window.addEventListener("resize", this.queueResize, { passive: true });
     window.addEventListener("orientationchange", this.queueResize, { passive: true });
+    // Escape leaves fullscreen without a click, so the only way to keep the
+    // settings label truthful is to listen for the change itself.
+    document.addEventListener("fullscreenchange", this.syncDisplayMode);
 
     this.app.ticker.maxFPS = C.FPS;
     this.app.ticker.add(this.tick);
   }
+
+  /**
+   * Ask the browser to enter or leave fullscreen.
+   *
+   * Must be called from a user gesture or the request is rejected - which is
+   * why this is driven by a button and never restored automatically on boot.
+   * The promise is deliberately swallowed: a refusal is a normal outcome (an
+   * iframe without the permission, or a browser that simply declines), and the
+   * `fullscreenchange` listener will correct the label either way.
+   */
+  setDisplayMode(mode: "windowed" | "fullscreen"): void {
+    this.displayMode = mode;
+    if (typeof document === "undefined") return;
+    try {
+      if (mode === "fullscreen" && !document.fullscreenElement) {
+        void document.documentElement.requestFullscreen?.().catch(() => this.syncDisplayMode());
+      } else if (mode === "windowed" && document.fullscreenElement) {
+        void document.exitFullscreen?.().catch(() => this.syncDisplayMode());
+      }
+    } catch {
+      this.syncDisplayMode();
+    }
+  }
+
+  /** Re-read the browser's actual state, so the label cannot lie. */
+  private syncDisplayMode = (): void => {
+    if (typeof document === "undefined") return;
+    this.displayMode = document.fullscreenElement ? "fullscreen" : "windowed";
+  };
 
   private queueResize = (): void => {
     // Mobile browsers fire resize repeatedly while the URL bar animates;
@@ -249,6 +292,17 @@ export class Game {
 
   get scene(): Scene | undefined {
     return this.stack[this.stack.length - 1];
+  }
+
+  /**
+   * How deep the scene stack is.
+   *
+   * Settings needs it: opened from the menu it is the only scene and BACK must
+   * *switch*, but opened from the pause overlay it sits on top of a live run
+   * and BACK must *pop*, or switching would destroy the run underneath.
+   */
+  get stackDepth(): number {
+    return this.stack.length;
   }
 
   switchScene(key: SceneKey | string, args?: SceneEnterArgs): void {
@@ -359,6 +413,7 @@ export class Game {
     this.running = false;
     window.removeEventListener("resize", this.queueResize);
     window.removeEventListener("orientationchange", this.queueResize);
+    document.removeEventListener("fullscreenchange", this.syncDisplayMode);
     this.particles.destroy();
     this.post.destroy();
     if (this.app) {

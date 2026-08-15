@@ -138,6 +138,15 @@ export interface SaveDocument {
   seenBeats: number[];
   bestByDifficulty: DifficultyTable;
   starsByDifficulty: DifficultyTable;
+  /**
+   * Visual-effect switches, keyed by flag name.
+   *
+   * A deliberate divergence from the Python, which lets these reset every
+   * launch. Bloom is the single biggest frame-rate lever a player has on a
+   * phone, and making them re-disable it on every open is a real cost that the
+   * desktop original never had to pay.
+   */
+  effects: Record<string, boolean>;
 }
 
 // ---------------------------------------------------------------------------
@@ -288,6 +297,22 @@ function asDifficultyTable(raw: unknown, lo: number, hi: number): DifficultyTabl
  * Non-arrays become an empty list; unusable entries are dropped rather than
  * defaulted.
  */
+/**
+ * Coerce a `{ name: boolean }` map, dropping anything that is not a boolean.
+ *
+ * Unknown flag names are kept: a save written by a newer build that adds a
+ * switch must survive a round trip through an older one, rather than silently
+ * losing the setting.
+ */
+function asFlagMap(raw: unknown): Record<string, boolean> {
+  const out: Record<string, boolean> = {};
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value === "boolean" && key) out[key] = value;
+  }
+  return out;
+}
+
 function asIntList(raw: unknown, lo: number, hi: number): number[] {
   if (!Array.isArray(raw)) return [];
   const seen = new Set<number>();
@@ -454,6 +479,8 @@ export class SaveData {
 
   /** Sorted indices of the narrative beats already shown. */
   seenBeats: number[] = [];
+  /** See {@link SaveDocument.effects}. Absent keys mean "on". */
+  effects: Record<string, boolean> = {};
 
   // --- schema 2: per-difficulty records ------------------------------------
 
@@ -550,6 +577,7 @@ export class SaveData {
       );
       this.storyComplete = asBool(pick(raw, "storyComplete", "story_complete"), false);
       this.seenBeats = asIntList(pick(raw, "seenBeats", "seen_beats"), 0, MAX_BEAT_KEY);
+      this.effects = asFlagMap(raw["effects"]);
 
       this.bestByDifficulty = asDifficultyTable(
         pick(raw, "bestByDifficulty", "best_by_difficulty"),
@@ -627,6 +655,7 @@ export class SaveData {
       storyProgress: clampInt(asInt(this.storyProgress, 0), 0, LEVEL_COUNT - 1),
       storyComplete: Boolean(this.storyComplete),
       seenBeats: asIntList(this.seenBeats, 0, MAX_BEAT_KEY),
+      effects: asFlagMap(this.effects),
       bestByDifficulty: dumpDifficultyTable(this.bestByDifficulty, 0, MAX_SCORE),
       starsByDifficulty: dumpDifficultyTable(this.starsByDifficulty, 0, MAX_STARS),
     };
@@ -843,6 +872,26 @@ export class SaveData {
     if (n <= 0) return;
     this.totalDeaths = clampInt(this.totalDeaths + n, 0, MAX_COUNTER);
     this._dirty = true;
+  }
+
+  /**
+   * Whether a visual effect is on. Absent means on, so a save written before
+   * these existed - or by the Python - reads as everything enabled.
+   */
+  effectEnabled(flag: string): boolean {
+    const v = this.effects[flag];
+    return v === undefined ? true : v;
+  }
+
+  /** Persist one visual-effect switch. */
+  setEffect(flag: string, value: boolean): void {
+    const key = String(flag);
+    if (!key) return;
+    const on = asBool(value, true);
+    if (this.effects[key] !== on) {
+      this.effects[key] = on;
+      this._dirty = true;
+    }
   }
 
   /** Persist the audio mute preference. */

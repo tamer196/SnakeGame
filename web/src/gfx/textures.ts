@@ -286,6 +286,85 @@ export function setGlow(
 }
 
 // ---------------------------------------------------------------------------
+// The render.py halo - a different falloff from the backgrounds' radial
+// ---------------------------------------------------------------------------
+
+const haloCache = new Map<number, Texture>();
+
+/**
+ * A cached **white** halo with `render.py::_build_glow`'s falloff
+ * (render.py:277-307): brightness `u^2 * (0.35 + 0.65u)` where `u` runs 0 at
+ * the rim to 1 at the core, plus a small solid core at `0.12r`.
+ *
+ * This is the curve behind `draw_glow_circle` - the headline glows, the star
+ * pops and the badge halos of the result screens. It is much steeper than
+ * {@link radialTexture}'s `1 - (d/r)^2` (the backgrounds' `_radial`): at half
+ * radius this one carries ~17% where the radial carries 75%. Substituting one
+ * for the other makes every heading halo read several times too hot - caught
+ * by screenshot against `captures/10-gameover.png`, not by any test.
+ */
+export function haloTexture(radius: number): Texture {
+  const q = quantiseRadius(radius);
+  const hit = haloCache.get(q);
+  if (hit) return hit;
+
+  const r = Math.min(q, MAX_BUILD_RADIUS);
+  const size = Math.max(2, r * 2);
+  const canvas = createCanvas(size, size);
+  const ctx = context2d(canvas);
+  clearToBlack(ctx, size, size);
+  ctx.globalCompositeOperation = "source-over";
+
+  // Concentric discs from the rim in, each overwriting the last - adding them
+  // would sum the series and blow the halo out.
+  const steps = Math.trunc(Math.max(10, Math.min(60, r * 1.35)));
+  for (let i = 0; i < steps; i++) {
+    const u = i / steps; // 0 at the rim, -> 1 at the core
+    const rr = r * (1 - u);
+    if (rr < 1) break;
+    const f = u * u * (0.35 + 0.65 * u);
+    if (f <= 0) continue;
+    const v = clamp8(255 * f);
+    ctx.fillStyle = `rgb(${v},${v},${v})`;
+    ctx.beginPath();
+    ctx.arc(r, r, Math.trunc(rr), 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // A tiny solid core keeps very small halos from vanishing entirely.
+  ctx.fillStyle = "rgb(255,255,255)";
+  ctx.beginPath();
+  ctx.arc(r, r, Math.max(1, Math.trunc(r * 0.12)), 0, Math.PI * 2);
+  ctx.fill();
+
+  const tex = canvasTexture(canvas);
+  haloCache.set(q, tex);
+  return tex;
+}
+
+/** An additive `draw_glow_circle` stamp, centred on its position. */
+export function haloSprite(radius: number, color: RGB, intensity = 1): Sprite {
+  const sprite = new Sprite(haloTexture(radius));
+  sprite.anchor.set(0.5);
+  sprite.blendMode = "add";
+  setHalo(sprite, radius, color, intensity);
+  return sprite;
+}
+
+/**
+ * Re-point an existing halo sprite. Intensity above 1 must be carried by a
+ * second stacked sprite - alpha clamps at 1, exactly as {@link setGlow}.
+ */
+export function setHalo(sprite: Sprite, radius: number, color: RGB, intensity = 1): void {
+  const r = Math.max(0.5, radius);
+  const tex = haloTexture(r);
+  if (sprite.texture !== tex) sprite.texture = tex;
+  sprite.width = r * 2;
+  sprite.height = r * 2;
+  sprite.tint = toHex(color);
+  sprite.alpha = intensity < 0 ? 0 : intensity > 1 ? 1 : intensity;
+}
+
+// ---------------------------------------------------------------------------
 // Other stamps
 // ---------------------------------------------------------------------------
 

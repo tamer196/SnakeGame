@@ -45,6 +45,7 @@ import { SnakeRenderer } from "../gfx/SnakeRenderer";
 import { makeRng } from "../core/mathx";
 import { Bar } from "../ui/bar";
 import { Button, type ButtonStyle } from "../ui/Button";
+import { grouped } from "../ui/format";
 import { uiGlowSprite, setUiGlow } from "../ui/glow";
 import { Panel } from "../ui/panel";
 import { Label, glyphTexture } from "../ui/text";
@@ -790,7 +791,7 @@ export class MenuScene extends Scene {
     const rows: Array<[string, number, number, "left" | "right", readonly [number, number, number]]> =
       [
         ["BEST SCORE", px + 18, py + 12, "left", theme.textDim],
-        [best.toLocaleString("en-US"), px + 18, py + 30, "left", lerpColor(UI_GOLD, UI_WHITE, 0.25)],
+        [grouped(best), px + 18, py + 30, "left", lerpColor(UI_GOLD, UI_WHITE, 0.25)],
         ["STORY", px + 18, py + 72, "left", theme.textDim],
         [this.storySummary(), px + pw - 18, py + 70, "right", lerpColor(theme.text, theme.accent, 0.35)],
         ["STARS", px + 18, py + 98, "left", theme.textDim],

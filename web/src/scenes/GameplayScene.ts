@@ -242,6 +242,20 @@ export class GameplayScene extends Scene implements GameplayPresenter {
 
     this.world.update(dt, pointer);
 
+    // The run is over: hand the result to the scene that owns the aftermath
+    // (gameplay.py:1161). The world already wrote the save and played the win
+    // sting inside finish(); this switch is the only way out of a finished
+    // run. Guarded on registration, like pause(), so a harness without the
+    // result scenes stays inert rather than throwing every frame.
+    if (this.world.finished && this.world.result) {
+      const key = this.world.won ? SCENES.VICTORY : SCENES.GAMEOVER;
+      if (this.game.registeredScenes().includes(key)) {
+        this.game.lastResult = { ...this.world.result } as Record<string, unknown>;
+        this.game.switchScene(key);
+        return;
+      }
+    }
+
     const clocks: FrameClocks = { t: this.world.clockT, hazardT: this.world.hazardT };
 
     // The background leans toward the snake, so the parallax tracks the player

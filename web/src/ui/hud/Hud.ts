@@ -39,6 +39,7 @@ import {
 } from "../../core/palette";
 import type { FontBook } from "../../gfx/fonts";
 import { Bar } from "../bar";
+import { grouped } from "../format";
 import { setUiGlow, uiGlowSprite } from "../glow";
 import { Label } from "../text";
 import { HudAnim } from "./HudAnim";
@@ -93,11 +94,6 @@ function step(v: number, steps = 6): number {
   const n = Math.max(1, Math.trunc(steps));
   const c = Math.max(0, Math.min(1, v));
   return Math.round(c * n) / n;
-}
-
-/** `f"{value:,}"` - the thousands separator the score is shown with. */
-function grouped(value: number): string {
-  return Math.trunc(value).toLocaleString("en-US");
 }
 
 export class Hud {

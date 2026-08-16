@@ -17,6 +17,8 @@ import { LevelSelectScene } from "./scenes/LevelSelectScene";
 import { MenuScene } from "./scenes/MenuScene";
 import { ModeSelectScene } from "./scenes/ModeSelectScene";
 import { PreviewScene } from "./scenes/PreviewScene";
+import { GameOverScene } from "./scenes/result/GameOverScene";
+import { VictoryScene } from "./scenes/result/VictoryScene";
 import { UiKitScene } from "./scenes/UiKitScene";
 
 function dismissBootSplash(): void {
@@ -63,6 +65,8 @@ async function main(): Promise<void> {
   game.registerScene("help", (g) => new HelpScene(g, sound));
   game.registerScene("mode", (g) => new ModeSelectScene(g, save, sound));
   game.registerScene("levels", (g) => new LevelSelectScene(g, save, sound));
+  game.registerScene("gameover", (g) => new GameOverScene(g, save, sound));
+  game.registerScene("victory", (g) => new VictoryScene(g, save, sound));
   // Development only: reachable by name from the screenshot harness, never
   // linked to from the game itself.
   game.registerScene("preview", (g) => new PreviewScene(g));

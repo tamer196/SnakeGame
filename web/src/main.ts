@@ -8,6 +8,7 @@
 import { Audio, installUnlockGesture } from "./audio";
 import { Game } from "./app/Game";
 import { SaveData } from "./core/save";
+import * as story from "./core/story";
 import { attachInput } from "./input/Input";
 import { BootScene } from "./scenes/BootScene";
 import { GameplayScene } from "./scenes/GameplayScene";
@@ -20,6 +21,7 @@ import { PreviewScene } from "./scenes/PreviewScene";
 import { GameOverScene } from "./scenes/result/GameOverScene";
 import { VictoryScene } from "./scenes/result/VictoryScene";
 import { SettingsScene } from "./scenes/SettingsScene";
+import { StoryScene } from "./scenes/StoryScene";
 import { UiKitScene } from "./scenes/UiKitScene";
 
 function dismissBootSplash(): void {
@@ -79,6 +81,7 @@ async function main(): Promise<void> {
   game.registerScene("gameover", (g) => new GameOverScene(g, save, sound));
   game.registerScene("victory", (g) => new VictoryScene(g, save, sound));
   game.registerScene("settings", (g) => new SettingsScene(g, save, sound));
+  game.registerScene("story", (g) => new StoryScene(g, sound));
   // Development only: reachable by name from the screenshot harness, never
   // linked to from the game itself.
   game.registerScene("preview", (g) => new PreviewScene(g));
@@ -88,9 +91,12 @@ async function main(): Promise<void> {
   dismissBootSplash();
 
   // Expose for debugging on a real device, where there is no console to hand.
+  // `story` is what lets the screenshot harness hand real Chapter/StoryBeat
+  // objects to the story scene, exercising the same duck-typing the game does.
   (window as unknown as { game?: Game; save?: SaveData; sound?: Audio }).game = game;
   (window as unknown as { save?: SaveData }).save = save;
   (window as unknown as { sound?: Audio }).sound = sound;
+  (window as unknown as { story?: unknown }).story = story;
 }
 
 main().catch(showFatal);

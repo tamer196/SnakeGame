@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">NEON SERPENT</string>
+    <string name="title_activity_main">NEON SERPENT</string>
+    <string name="package_name">com.placeholder.neonserpent</string>
+    <string name="custom_url_scheme">com.placeholder.neonserpent</string>
+</resources>

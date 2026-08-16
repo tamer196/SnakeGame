@@ -19,6 +19,7 @@ import { ModeSelectScene } from "./scenes/ModeSelectScene";
 import { PreviewScene } from "./scenes/PreviewScene";
 import { GameOverScene } from "./scenes/result/GameOverScene";
 import { VictoryScene } from "./scenes/result/VictoryScene";
+import { SettingsScene } from "./scenes/SettingsScene";
 import { UiKitScene } from "./scenes/UiKitScene";
 
 function dismissBootSplash(): void {
@@ -56,6 +57,16 @@ async function main(): Promise<void> {
   const sound = new Audio({ muted: save.muted });
   installUnlockGesture(sound, window);
 
+  // The four visual-effect switches persist (a deliberate divergence from the
+  // Python, whose schema never grew the field). Absent keys read as ON, so a
+  // Python-written save loads with everything enabled.
+  game.post.fx.setPostFlags({
+    bloom: save.effectEnabled("bloom"),
+    scanlines: save.effectEnabled("scanlines"),
+    grain: save.effectEnabled("grain"),
+  });
+  game.post.fx.shakeEnabled = save.effectEnabled("shake");
+
   // Scenes register themselves here; Game never imports a scene module, which
   // keeps the dependency arrow pointing one way and avoids import cycles.
   game.registerScene("boot", (g) => new BootScene(g));
@@ -67,6 +78,7 @@ async function main(): Promise<void> {
   game.registerScene("levels", (g) => new LevelSelectScene(g, save, sound));
   game.registerScene("gameover", (g) => new GameOverScene(g, save, sound));
   game.registerScene("victory", (g) => new VictoryScene(g, save, sound));
+  game.registerScene("settings", (g) => new SettingsScene(g, save, sound));
   // Development only: reachable by name from the screenshot harness, never
   // linked to from the game itself.
   game.registerScene("preview", (g) => new PreviewScene(g));

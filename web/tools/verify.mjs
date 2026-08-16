@@ -200,7 +200,11 @@ async function run(browser, dev) {
   const capped = perf.mean < 17.0;
   const perMpx = perf.mean / mpx;
   const shown = `${capped ? "<=" : ""}${perMpx.toFixed(2)} ms/Mpx`;
-  perMpx < 12
+  // A capped profile always passes: its mean is the vsync floor, so per-Mpx is
+  // an upper bound, not a measurement - dividing 16.67 ms by a small canvas
+  // says nothing about fill cost. (Dropping the phone resolution cap from 3 to
+  // 2 made the iPhone profile vsync-locked and tripped exactly this.)
+  capped || perMpx < 12
     ? ok(`frame ${perf.mean.toFixed(2)} ms mean / ${perf.p95.toFixed(2)} p95 ` +
          `(~${fps.toFixed(0)} fps, ${mpx.toFixed(2)} Mpx, ${shown}, software GL)`)
     : bad(`fill cost regressed: ${shown} over ${mpx.toFixed(2)} Mpx ` +

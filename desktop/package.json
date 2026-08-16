@@ -1,0 +1,42 @@
+{
+  "name": "neon-serpent-desktop",
+  "productName": "NEON SERPENT",
+  "version": "1.0.0",
+  "description": "NEON SERPENT - desktop wrapper around the web build",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "smoke": "electron . --smoke",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.placeholder.neonserpent",
+    "productName": "NEON SERPENT",
+    "directories": {
+      "output": "dist-app"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      {
+        "from": "../web/dist",
+        "to": "dist"
+      }
+    ],
+    "win": {
+      "target": "portable"
+    },
+    "mac": {
+      "category": "public.app-category.arcade-games"
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "Game"
+    }
+  }
+}

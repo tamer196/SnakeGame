@@ -71,3 +71,7 @@ ehthumbs.db
 Desktop.ini
 $RECYCLE.BIN/
 .DS_Store
+
+# --- Desktop wrapper (Electron) ---
+desktop/dist-app/
+desktop/smoke.png

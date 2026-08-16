@@ -22,6 +22,7 @@ import { Container, Sprite } from "pixi.js";
 
 import type { Game } from "../app/Game";
 import { Scene, SCENES, type SceneEnterArgs } from "../app/Scene";
+import { canQuit, shellBridge } from "../app/shell";
 import * as C from "../core/config";
 import { clamp, dist, easeOutBack, pulse } from "../core/mathx";
 import { LEVEL_COUNT } from "../core/level";
@@ -233,13 +234,17 @@ export class MenuScene extends Scene {
   }
 
   private specs(): Spec[] {
-    return [
+    const specs: Spec[] = [
       { key: "play", label: this.storyInProgress() ? "CONTINUE" : "PLAY", style: "primary" },
       { key: "levels", label: "LEVELS", style: "primary" },
       { key: "help", label: "HOW TO PLAY", style: "ghost" },
       { key: "settings", label: "SETTINGS", style: "ghost" },
-      { key: "quit", label: "QUIT", style: "danger" },
     ];
+    // A browser tab cannot close itself, and a visible button that does
+    // nothing is worse than an absent one - QUIT exists only where a wrapper
+    // can genuinely close the window (the user's call, 2026-08-16).
+    if (canQuit()) specs.push({ key: "quit", label: "QUIT", style: "danger" });
+    return specs;
   }
 
   // -------------------------------------------------------------------
@@ -337,10 +342,11 @@ export class MenuScene extends Scene {
         this.go(SCENES.SETTINGS, { back: SCENES.MENU });
         break;
       case "quit":
-        // A browser tab cannot close itself, so the nearest honest thing is to
-        // flush the save. The button stays for parity with the desktop wrapper,
-        // where Electron can genuinely quit.
+        // Flush the save first, whoever is asking. In a plain tab (Escape
+        // still routes here) that flush is the whole action; under a wrapper
+        // the window then genuinely closes.
         this.save.save();
+        shellBridge()?.quit?.();
         break;
       default:
         break;

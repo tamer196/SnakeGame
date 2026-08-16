@@ -174,7 +174,11 @@ export class Game {
     await this.app.init({
       background: 0x05070f,
       antialias: false, // the look is neon glow, not smooth edges; saves fill rate
-      resolution: Math.min(window.devicePixelRatio || 1, 3),
+      // Capped at 2, not 3: no test device exists for this port, so assume the
+      // worst - a 3x phone pushes 2.25x the pixels of a 2x one through the
+      // post chain for a sharpness gain nobody can see at arm's length
+      // (the user's call, 2026-08-16).
+      resolution: Math.min(window.devicePixelRatio || 1, 2),
       autoDensity: true,
       resizeTo: window,
       powerPreference: "high-performance",

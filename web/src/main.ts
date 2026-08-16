@@ -60,10 +60,16 @@ async function main(): Promise<void> {
   installUnlockGesture(sound, window);
 
   // The four visual-effect switches persist (a deliberate divergence from the
-  // Python, whose schema never grew the field). Absent keys read as ON, so a
-  // Python-written save loads with everything enabled.
+  // Python, whose schema never grew the field). Absent keys read as ON - with
+  // one exception: bloom is the biggest frame-rate lever a phone player has,
+  // and no test device exists for this port, so on a touch device it defaults
+  // OFF until the player explicitly turns it on in settings (the user's call,
+  // 2026-08-16). An explicit save value always wins, either way.
+  const touchDevice = window.matchMedia?.("(pointer: coarse)")?.matches ?? false;
+  const bloomOn =
+    "bloom" in save.effects ? save.effectEnabled("bloom") : !touchDevice;
   game.post.fx.setPostFlags({
-    bloom: save.effectEnabled("bloom"),
+    bloom: bloomOn,
     scanlines: save.effectEnabled("scanlines"),
     grain: save.effectEnabled("grain"),
   });

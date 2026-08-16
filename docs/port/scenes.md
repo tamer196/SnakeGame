@@ -38,13 +38,21 @@ the documented #1 bug source in this design.
 | Section | Source | Audited | Ported |
 |---|---|---|---|
 | 1 Menu | menu.py | yes | **yes** - `web/src/scenes/MenuScene.ts` |
-| 2 Mode select | mode_select.py | **no** | no |
-| 3 Level select | level_select.py | **no** | no |
+| 2 Mode select | mode_select.py | **no** | **yes** - `ModeSelectScene.ts` |
+| 3 Level select | level_select.py | **no** | **yes** - `LevelSelectScene.ts` |
 | 4 Pause / 5 Help | pause.py, help_scene.py | **no** | **yes** - `PauseScene.ts`, `HelpScene.ts` |
-| 6 `_ResultScene` base | gameover.py:1-704 | yes | no |
-| 7 Game over / 8 Victory | gameover.py:705-1184 | yes | no |
-| 9 Settings | settings.py | yes | no |
-| 10 Story | story_scene.py | yes | no |
+| 6 `_ResultScene` base | gameover.py:1-704 | yes | **yes** - `scenes/result/ResultScene.ts` |
+| 7 Game over / 8 Victory | gameover.py:705-1184 | yes | **yes** - `scenes/result/{GameOverScene,VictoryScene}.ts` |
+| 9 Settings | settings.py | yes | **yes** - `SettingsScene.ts` |
+| 10 Story | story_scene.py | yes | **yes** - `StoryScene.ts` + `scenes/story/cards.ts` |
+
+**All nine scenes are ported and verified against their captures.** One
+correction discovered during the §6-8 port: those sections say the
+`draw_glow_circle` call sites map to `gfx/textures.ts::glowSprite` (§6.2.6) or
+`ui/glow.ts::uiGlowSprite` (§7.11) - **both are wrong**. `render.py::_build_glow`
+ramps by `u²(0.35+0.65u)`, a third curve, ported as `gfx/textures.ts::haloSprite`
+/ `setHalo`; substituting the backgrounds' radial read ~4x too hot behind
+GAME OVER, caught by screenshot against `captures/10-gameover.png`.
 
 Read that table before trusting a number. Sections 2, 3, 4 and 5 are **first-pass
 transcriptions that no audit has checked** - reread the cited line of Python while implementing

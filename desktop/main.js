@@ -77,7 +77,11 @@ app.whenReady().then(() => {
             })`,
           );
           const image = await win.webContents.capturePage();
-          const out = path.join(__dirname, "smoke.png");
+          // Inside a packaged build __dirname is the read-only asar; write
+          // where the smoke can actually land.
+          const out = app.isPackaged
+            ? path.join(app.getPath("temp"), "neon-serpent-smoke.png")
+            : path.join(__dirname, "smoke.png");
           fs.writeFileSync(out, image.toPNG());
           const size = image.getSize();
           console.log(

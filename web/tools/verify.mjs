@@ -219,6 +219,147 @@ async function run(browser, dev) {
   await page.close();
 }
 
+/**
+ * Scene instances are cached and reused, so `onEnter` must reset every piece
+ * of state the scene owns - the documented #1 bug source in this design, and
+ * one that no screenshot catches because the leak only shows on the *second*
+ * visit. So: enter a scene, poison its animation state the way a real visit
+ * would, leave, come back, and require the zero state.
+ *
+ * Property-based rather than field-listed on purpose: it asserts the numbers
+ * a leak would move, not an inventory that would rot as scenes change.
+ */
+async function checkSceneReuse(browser) {
+  console.log(`\n=== scene reuse (cached instances must reset) ===`);
+  const page = await browser.newPage();
+  page.on("pageerror", (e) => bad(`page error during reuse check: ${e}`));
+  await page.setViewport({ width: 1280, height: 720, deviceScaleFactor: 1 });
+  await page.goto(`http://localhost:${PORT}/`, { waitUntil: "networkidle2", timeout: 30000 });
+  const booted = await page
+    .waitForFunction("!!window.game && !!window.game.viewport", { timeout: 15000 })
+    .then(() => true)
+    .catch(() => false);
+  if (!booted) {
+    bad("game did not boot for the reuse check");
+    await page.close();
+    return;
+  }
+
+  // Snapshot every own numeric field of the live scene. Field NAMES are
+  // meaningless in a minified build, but their VALUES still move, and that is
+  // all this needs: the animation state is whatever changed between an early
+  // frame and a settled one.
+  const snapshot = async (key, args, settleMs) => {
+    await page.evaluate(
+      (k, a) => {
+        window.game.lastResult = {
+          score: 486, levelIndex: 3, levelName: "Solar Flare", foodEaten: 14,
+          goalFood: 14, stars: 3, newBest: true, won: true, elapsed: 48.9,
+          maxCombo: 8, deaths: 0, mode: "free", story: false, nextIndex: 4,
+          finalLevel: false, difficulty: "normal",
+        };
+        window.game.switchScene(k, a ?? undefined);
+      },
+      key,
+      args ?? null,
+    );
+    await new Promise((r) => setTimeout(r, settleMs));
+    return page.evaluate(() => {
+      const s = window.game.scene;
+      const out = {};
+      for (const k of Object.keys(s)) {
+        const v = s[k];
+        if (typeof v === "number" && Number.isFinite(v)) out[k] = v;
+        else if (typeof v === "boolean") out[k] = v ? 1 : 0;
+      }
+      return out;
+    });
+  };
+
+  const SCENES = [
+    ["victory", null],
+    ["gameover", null],
+    ["settings", { back: "menu" }],
+    ["menu", null],
+    ["levels", null],
+    ["mode", null],
+    ["help", null],
+  ];
+  const registered = await page.evaluate(() => window.game.registeredScenes());
+
+  for (const [key, args] of SCENES) {
+    if (!registered.includes(key)) continue;
+    const fresh = await snapshot(key, args, 90);
+    const settled = await snapshot(key, args, 2200);
+    // A second settled reading, so a field's own ongoing wobble can be told
+    // from the distance it travelled. Without this, a sawtooth like the
+    // preview well's grain phase is a coin flip and the check goes flaky.
+    const jitter = await page.evaluate(() => {
+      const s = window.game.scene;
+      const out = {};
+      for (const k of Object.keys(s)) {
+        const v = s[k];
+        if (typeof v === "number" && Number.isFinite(v)) out[k] = v;
+        else if (typeof v === "boolean") out[k] = v ? 1 : 0;
+      }
+      return out;
+    });
+    await new Promise((r) => setTimeout(r, 150));
+    const jitter2 = await page.evaluate(() => {
+      const s = window.game.scene;
+      const out = {};
+      for (const k of Object.keys(s)) {
+        const v = s[k];
+        if (typeof v === "number" && Number.isFinite(v)) out[k] = v;
+        else if (typeof v === "boolean") out[k] = v ? 1 : 0;
+      }
+      return out;
+    });
+    await page.evaluate(() => window.game.switchScene("menu"));
+    await new Promise((r) => setTimeout(r, 150));
+    const reentry = await snapshot(key, args, 90);
+
+    // Only fields that actually moved while the scene played are animation
+    // state; anything identical in both (levelIndex, goalFood, ...) is
+    // parsed-per-entry data and says nothing about resetting.
+    //
+    // Two filters keep this from flapping. A field must out-travel its own
+    // ongoing wobble, and it must have moved by at least 1 - which excludes
+    // the fractional accumulators (the confetti emitter's fill level, the
+    // grain phase) whose value is a sawtooth in [0, 1) and therefore
+    // meaningless to compare against a single sample. That is not a fudge: a
+    // leaked accumulator costs one particle's timing, while the leaks worth
+    // failing a build over - scene clocks, counters, flags, card indices -
+    // all travel by 1 or more.
+    const animated = Object.keys(fresh).filter((k) => {
+      if (!(k in settled)) return false;
+      const moved = Math.abs(settled[k] - fresh[k]);
+      if (moved < 1) return false;
+      const wobble = Math.abs((jitter2[k] ?? settled[k]) - (jitter[k] ?? settled[k]));
+      return moved > 5 * wobble;
+    });
+    if (animated.length === 0) {
+      note(`${key}: nothing animates over 2 s, so there is no reset to prove`);
+      continue;
+    }
+    // Self-calibrating, per field: a reset scene is nearer its fresh value
+    // than its settled one. No tuned threshold anywhere.
+    const stale = animated.filter((k) => {
+      if (!(k in reentry)) return false;
+      return Math.abs(reentry[k] - fresh[k]) > Math.abs(reentry[k] - settled[k]);
+    });
+    stale.length === 0
+      ? ok(`${key}: reused instance replays from the start (${animated.length} animated field(s) reset)`)
+      : bad(
+          `${key}: state survived re-entry - ` +
+            stale
+              .map((k) => `${k} ${reentry[k].toFixed(2)} (fresh ${fresh[k].toFixed(2)}, settled ${settled[k].toFixed(2)})`)
+              .join("; "),
+        );
+  }
+  await page.close();
+}
+
 const server = await serve(DIST);
 const browser = await puppeteer.launch({
   executablePath: CHROME,
@@ -227,6 +368,7 @@ const browser = await puppeteer.launch({
 });
 try {
   for (const d of DEVICES) await run(browser, d);
+  await checkSceneReuse(browser);
 } finally {
   await browser.close();
   server.close();

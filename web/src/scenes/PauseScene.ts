@@ -81,7 +81,19 @@ const SPECS: ReadonlyArray<readonly [string, string, "primary" | "ghost" | "dang
  * relative place - the profile is defined in `x / (w - 1)` terms, so a scaled
  * copy is the same curve.
  */
+const ruleCache = new Map<string, Texture>();
+
+/** Cache key: the two accents are the only thing the gradient reads. */
+function ruleKey(theme: Theme): string {
+  return `${toHex(theme.accent)}|${toHex(theme.accent2)}`;
+}
+
 function ruleTexture(theme: Theme): Texture {
+  // Cached per theme pair: pausing under each of the twelve level themes used
+  // to mint (and orphan, undestroyed) a fresh texture every time.
+  const key = ruleKey(theme);
+  const hit = ruleCache.get(key);
+  if (hit) return hit;
   const w = RULE_W;
   const canvas = createCanvas(w, 2);
   const ctx = context2d(canvas);
@@ -92,7 +104,9 @@ function ruleTexture(theme: Theme): Texture {
     ctx.fillStyle = cssRgb(lerpColor(theme.accent, theme.accent2, f), a / 255);
     ctx.fillRect(x, 0, 1, 2);
   }
-  return canvasTexture(canvas);
+  const tex = canvasTexture(canvas);
+  ruleCache.set(key, tex);
+  return tex;
 }
 
 export class PauseScene extends Scene {
@@ -380,7 +394,7 @@ export class PauseScene extends Scene {
     this.title.setColor(lerpColor(theme.accent, UI_WHITE, 0.25 + 0.35 * breathe));
     this.title.place(cx, py + 30, "center");
 
-    const key = `${toHex(theme.accent)}|${toHex(theme.accent2)}`;
+    const key = ruleKey(theme);
     if (key !== this.ruleTheme) {
       this.ruleTheme = key;
       this.rule.texture = ruleTexture(theme);

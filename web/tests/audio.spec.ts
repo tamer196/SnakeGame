@@ -772,8 +772,14 @@ describe("audio: engine against a stub context", () => {
   it("the background bake fills the whole bank without being asked", async () => {
     const ctx = new StubContext();
     const audio = await unlocked(ctx);
-    // One cue per task, so give the queue time to drain.
-    await new Promise((r) => setTimeout(r, 250));
+    // One cue per task, so wait for the queue to drain rather than sleeping a
+    // fixed slice: the bake is scheduled on the host's task queue, and a whole
+    // test suite running in parallel can starve it well past any constant we
+    // would pick (this test failed intermittently for exactly that reason).
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline && !SOUND_NAMES.every((n) => audio.isBaked(n))) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
     for (const name of SOUND_NAMES) {
       expect(audio.isBaked(name), `${name} baked`).toBe(true);
     }

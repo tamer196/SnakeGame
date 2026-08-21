@@ -106,12 +106,14 @@ export function barFillTexture(h: number, color: RGB): Texture {
     ctx.fillRect(0, y, 2, 1);
   }
 
+  // Non-destructive, for the reason spelled out in `ui/text.ts`: `set`
+  // re-fetches only when its quantised colour key changes, so destroying an
+  // evicted fill would break a parked Bar whose colour never moves (the
+  // menu's gold star bar) once the HUD's two animated bars had cycled the
+  // cache - three or four differently-themed levels is enough.
   if (fillCache.size >= FILL_CACHE_LIMIT) {
     const oldest = fillCache.keys().next();
-    if (!oldest.done) {
-      fillCache.get(oldest.value)?.destroy(true);
-      fillCache.delete(oldest.value);
-    }
+    if (!oldest.done) fillCache.delete(oldest.value);
   }
   const tex = canvasTexture(canvas);
   fillCache.set(key, tex);

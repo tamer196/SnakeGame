@@ -183,6 +183,13 @@ export class GameplayScene extends Scene implements GameplayPresenter {
     }
     this.hazards.clear();
     this.releasePopups();
+    // Drop the pre-rendered parallax layers rather than holding several MB of
+    // them across the results, story and menu screens. Keeping them bought
+    // nothing: `onEnter` rebuilds unconditionally, so even a retry of the same
+    // level never reused this copy. (ResultScene keeps its backdrop on
+    // purpose, because it *does* check before rebuilding.)
+    this.background?.destroy();
+    this.background = null;
   }
 
   override onResize(): void {

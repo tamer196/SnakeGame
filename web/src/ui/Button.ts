@@ -287,13 +287,15 @@ export function buttonBodyTexture(
     }
   }
 
-  // Unlike Python's dict, a Pixi cache must destroy on evict or leak VRAM.
+  // Dropping the oldest entry bounds the cache; it must NOT destroy the
+  // texture. `draw` re-fetches only when its own `bodyKey` changes, so a
+  // parked button in another cached scene would keep drawing a destroyed
+  // texture forever - and the menu's theme carousel mints ~48 bodies per
+  // 11 s period, so the 96-entry cache turns over in about half a minute of
+  // idling. Pixi's TextureGCSystem reclaims what nothing draws any more.
   if (bodyCache.size >= BODY_CACHE_LIMIT) {
     const oldest = bodyCache.keys().next();
-    if (!oldest.done) {
-      bodyCache.get(oldest.value)?.destroy(true);
-      bodyCache.delete(oldest.value);
-    }
+    if (!oldest.done) bodyCache.delete(oldest.value);
   }
   const tex = canvasTexture(canvas);
   bodyCache.set(key, tex);

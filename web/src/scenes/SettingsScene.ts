@@ -250,6 +250,8 @@ export class SettingsScene extends Scene {
   private readonly wellClip = new Container();
   private readonly wellMask = new Graphics();
   private readonly wellShift = new Container();
+  /** Inside the shake offset, inside the bloom: the well's actual picture. */
+  private readonly wellContent = new Container();
   private readonly wellFill = new Graphics();
   private readonly wellGrid = new Graphics();
   private readonly snakeView = new SnakeRenderer();
@@ -361,15 +363,15 @@ export class SettingsScene extends Scene {
     this.grainSprite = new Sprite();
     this.grainSprite.width = WELL.w;
     this.grainSprite.height = WELL.h;
+    // Bloom applies to the CONTENT only, with the scanline lattice and the
+    // grain composited on top of the bloomed result - the order the Python
+    // uses (settings.py:1049-1058) and the same order the real chain uses
+    // (bloom on the inner wrap, CRT and grain outside it). Filtering the
+    // overlays too would glow the lattice and stripe the halo.
     this.bloom.gain = BLOOM_STRENGTH;
-    this.wellShift.filters = [this.bloom];
-    this.wellShift.addChild(
-      this.wellFill,
-      this.wellGrid,
-      this.snakeView.container,
-      this.scanSprite,
-      this.grainSprite,
-    );
+    this.wellContent.filters = [this.bloom];
+    this.wellContent.addChild(this.wellFill, this.wellGrid, this.snakeView.container);
+    this.wellShift.addChild(this.wellContent, this.scanSprite, this.grainSprite);
     this.wellClip.addChild(this.wellShift);
 
     // -- buttons -------------------------------------------------------------

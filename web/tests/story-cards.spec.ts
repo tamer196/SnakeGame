@@ -50,6 +50,13 @@ describe("splitMarker", () => {
     // A "fix" would change which cards become plates - ported as shipped.
     expect(splitMarker("Mill. Road")).toEqual(["MILL", "Road"]);
   });
+
+  it("strips separators off the FRONT of the remainder only", () => {
+    // Python is rest.strip().lstrip(_SEPARATORS).strip(), so trailing
+    // punctuation survives; stripping both ends ate it.
+    expect(splitMarker("II. R.U.R.")).toEqual(["II", "R.U.R."]);
+    expect(splitMarker("Chapter V - The End...")).toEqual(["V", "The End..."]);
+  });
 });
 
 describe("normaliseCard", () => {
@@ -94,6 +101,20 @@ describe("normaliseCard", () => {
       title: "Cold Boot",
       roman: "II",
     });
+  });
+
+  it("skips an empty early alias like Python's falsy-sequence test", () => {
+    // `[]` is truthy in JS but falsy in Python, so `if value:` there falls
+    // through to the next name. Taking the empty array dropped the card.
+    expect(normaliseCard({ lines: [], text: "The board is listening." })!.lines).toEqual([
+      "The board is listening.",
+    ]);
+    // A beat-shaped object with no intro must fall through to its outro.
+    expect(normaliseCard({ title: "T", intro: [], outro: ["after"] })!.lines).toEqual([
+      "after",
+    ]);
+    // A blank string alias is skipped the same way.
+    expect(normaliseCard({ title: "   ", name: "Real" })!.title).toBe("Real");
   });
 
   it("returns null for anything holding no text", () => {

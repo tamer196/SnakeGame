@@ -84,14 +84,20 @@ function glyphEntry(text: string, opts: TextStyleOptions, fonts: FontBook): Glyp
   const entry: GlyphEntry = { texture: canvasTexture(canvas), width: w, height: h };
 
   // Python wipes the whole cache when it fills; dropping the oldest entry is
-  // the same bound without the stall, and matters more here because each entry
-  // holds GPU memory.
+  // the same bound without the stall.
+  //
+  // Eviction must NOT destroy the texture. Nothing here knows who is still
+  // drawing it, and no holder re-fetches: `set` below early-returns while the
+  // string is unchanged, so the oldest entries are precisely the static
+  // labels of cached, reused scenes ("SETTINGS", "NEW BEST", the HUD
+  // captions). Destroying those left them drawing a dead texture for the rest
+  // of the session once ~900 distinct strings had been minted, which one
+  // result screen's count-up gets a sixth of the way toward on its own.
+  // Dropping the reference is enough: Pixi's TextureGCSystem is on by default
+  // and reclaims the GPU resource of a texture nothing has drawn for 60 s.
   if (glyphCache.size >= GLYPH_CACHE_LIMIT) {
     const oldest = glyphCache.keys().next();
-    if (!oldest.done) {
-      glyphCache.get(oldest.value)?.texture.destroy(true);
-      glyphCache.delete(oldest.value);
-    }
+    if (!oldest.done) glyphCache.delete(oldest.value);
   }
   glyphCache.set(key, entry);
   return entry;

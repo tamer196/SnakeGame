@@ -35,12 +35,20 @@ const ROMAN_RE = /^[IVXLCDM]+$/;
 const CHAPTER_WORDS = new Set(["chapter", "chapters", "chap", "ch", "act", "part", "book"]);
 const SEPARATORS = "-–—:.·|";
 
+/** Python's `str.strip(_SEPARATORS)` - both ends. Used on the marker token. */
 function stripSeparators(s: string): string {
   let a = 0;
   let b = s.length;
   while (a < b && SEPARATORS.includes(s[a]!)) a++;
   while (b > a && SEPARATORS.includes(s[b - 1]!)) b--;
   return s.slice(a, b);
+}
+
+/** Python's `str.lstrip(_SEPARATORS)` - the front only. Used on the title. */
+function lstripSeparators(s: string): string {
+  let a = 0;
+  while (a < s.length && SEPARATORS.includes(s[a]!)) a++;
+  return s.slice(a);
 }
 
 /** Arabic to roman, clamped to something a numeral can express. */
@@ -101,8 +109,10 @@ export function splitMarker(title: unknown): [string, string] {
   else if (ROMAN_RE.test(number.toUpperCase())) roman = number.toUpperCase();
   else return ["", raw];
 
-  let remainder = rest.trim();
-  remainder = stripSeparators(remainder).trim();
+  // Python is `rest.strip().lstrip(_SEPARATORS).strip()` - separators come off
+  // the FRONT only, so a title ending in one keeps it ("II. R.U.R." stays
+  // "R.U.R.", not "R.U.R").
+  const remainder = lstripSeparators(rest.trim()).trim();
   return [roman, remainder];
 }
 
@@ -130,12 +140,22 @@ function asLines(value: unknown): string[] {
   return out.slice(0, 8); // a card is never a wall of text
 }
 
-/** First present, non-empty (truthy) property named in `names`. */
+/**
+ * First present, non-empty property named in `names`.
+ *
+ * Python's `_pick` tests `if value:`, and there an empty list or tuple is
+ * FALSY - so `{lines: [], text: "..."}` falls through to `text`. In JS `[]` is
+ * truthy, and taking it would drop the card's only prose. Empty collections
+ * and blank strings are therefore skipped explicitly.
+ */
 function pick(source: unknown, ...names: string[]): unknown {
   const record = source as Record<string, unknown>;
   for (const name of names) {
     const value = record[name];
-    if (value) return value;
+    if (!value) continue;
+    if (Array.isArray(value) && value.length === 0) continue;
+    if (typeof value === "string" && value.trim() === "") continue;
+    return value;
   }
   return null;
 }

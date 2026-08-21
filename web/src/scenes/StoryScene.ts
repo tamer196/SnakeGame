@@ -161,6 +161,11 @@ export class StoryScene extends Scene {
   private spoken = 0;
 
   // -- layers, in draw order ---------------------------------------------------
+  /** Python's `surface.fill(theme.bg_bottom)` when no backdrop exists
+   * (story_scene.py:956-959): shown while `bg` is null, so a stage that fails
+   * to build - or the single frame of an empty deck - is themed rather than
+   * the renderer's raw clear colour. */
+  private readonly bgFallback = new Graphics();
   private readonly bgLayer = new Container();
   private readonly starLayer = new Graphics();
   private readonly scrim: Sprite;
@@ -260,7 +265,14 @@ export class StoryScene extends Scene {
     // particles (inserted on entry), scrim, card, chrome. The chrome must NOT
     // inherit the card's alpha - counter, pips, hint and both buttons stay at
     // full strength through both fades.
-    this.root.addChild(this.bgLayer, this.starLayer, this.scrim, this.cardLayer, this.chrome);
+    this.root.addChild(
+      this.bgFallback,
+      this.bgLayer,
+      this.starLayer,
+      this.scrim,
+      this.cardLayer,
+      this.chrome,
+    );
   }
 
   // ------------------------------------------------------------------
@@ -293,6 +305,7 @@ export class StoryScene extends Scene {
     this.fadingOut = false;
     this.spoken = 0;
 
+    this.paintFallback();
     const show = !this.pendingFinish;
     this.starLayer.visible = show;
     this.scrim.visible = show;
@@ -303,6 +316,7 @@ export class StoryScene extends Scene {
     if (this.pendingFinish) return;
 
     this.ensureBackground();
+    this.paintFallback(); // hides itself if the backdrop built
     this.ensureAtmosphere();
     this.root.addChildAt(this.game.particles.root, this.root.getChildIndex(this.scrim));
     this.beginCard(0);
@@ -335,6 +349,7 @@ export class StoryScene extends Scene {
     ) {
       this.dropBackground();
       this.ensureBackground();
+      this.paintFallback();
       this.ensureAtmosphere();
     }
   }
@@ -393,6 +408,14 @@ export class StoryScene extends Scene {
       this.bg = null;
     }
     this.bgTheme = null;
+  }
+
+  /** The themed under-fill, visible only while there is no backdrop. */
+  private paintFallback(): void {
+    const o = this.game.viewport.overscan;
+    this.bgFallback.clear();
+    this.bgFallback.rect(o.x, o.y, o.w, o.h).fill(toHex(this.theme.bgBottom));
+    this.bgFallback.visible = this.bg === null;
   }
 
   /** Stars and the scrim both span overscan, not the design box, or a wide

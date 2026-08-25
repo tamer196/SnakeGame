@@ -30,7 +30,7 @@
  *     is reported separately as a fact about the device, not a failure.
  */
 
-import { launchAndAttach, screencap, setRotation, sleep, adb } from "./lib/android.mjs";
+import { launchAndAttach, screencap, setRotation, sleep, adb, displaySize, keepAwake, isLocked } from "./lib/android.mjs";
 
 const args = {};
 for (let i = 2; i < process.argv.length; i++) {
@@ -65,6 +65,20 @@ if (devices.length !== 1) {
 // WebView latches the pre-rotation metrics, which quietly makes every size
 // reading below a portrait one.
 setRotation(1);
+// A sleeping display hides the page, which stops rAF, which freezes game.time -
+// and that reads exactly like the rotation crash this harness exists to catch.
+const wake = keepAwake();
+await sleep(1200);
+if (isLocked()) {
+  wake();
+  console.log(
+    "\nRESULT: FAIL (the device is locked) - a lock screen leaves the page hidden, so " +
+      "requestAnimationFrame never fires and game.time never moves, which looks exactly " +
+      "like a dead game loop. Unlock the phone and re-run; the screen timeout is raised " +
+      "for the duration so it will not re-lock.",
+  );
+  process.exit(1);
+}
 await sleep(2500);
 const { browser, page, release } = await launchAndAttach({
   pkg: PKG,
@@ -77,6 +91,15 @@ await page.evaluate(() => {
   window.__errs = [];
   addEventListener("error", (e) =>
     window.__errs.push({ msg: e.message, at: e.error ? String(e.error.stack).split("\n")[1] : null }),
+  );
+  // Raw client coordinates, captured before the game sees them: the touch check
+  // needs to know where the WebView thinks the finger landed, not only where
+  // the game concluded it did.
+  window.__raw = [];
+  addEventListener(
+    "pointerdown",
+    (e) => window.__raw.push({ type: e.pointerType, cx: +e.clientX.toFixed(2), cy: +e.clientY.toFixed(2) }),
+    true,
   );
 });
 
@@ -92,8 +115,24 @@ const read = () =>
       ox: +game.viewport.offsetX.toFixed(1), oy: +game.viewport.offsetY.toFixed(1),
       pillar: game.viewport.hasPillarbox, letter: game.viewport.hasLetterbox,
     },
+    safe: { ...game.viewport.safe },
     errs: window.__errs.length,
   }));
+
+// Everything below assumes a visible, ticking page. Say so plainly rather than
+// letting it surface as a dozen unrelated failures.
+const live = await page.evaluate(() => ({ vis: document.visibilityState, t: window.game ? game.time : null }));
+if (live.vis !== "visible" || !live.t) {
+  console.log(
+    `
+RESULT: FAIL (page is ${live.vis}, game.time ${live.t}) - the game is not running in ` +
+      `the foreground. Wake and unlock the device, put the app on screen, and re-run.`,
+  );
+  await browser.disconnect();
+  release();
+  wake();
+  process.exit(1);
+}
 
 // ---------------------------------------------------------------------------
 console.log(`\n=== device ===`);
@@ -149,14 +188,27 @@ shot("dv-02-after-rotations.png");
 console.log(`\n=== screen budget ===`);
 let s = await read();
 const full = Math.min(s.screen[0] / 1280, s.screen[1] / 720);
-const lost = s.screen[1] - s.inner[1];
+const lostY = s.screen[1] - s.inner[1];
+const lostX = s.screen[0] - s.inner[0];
 console.log(`  screen ${s.screen[0]}x${s.screen[1]} css @${s.dpr}x, webview ${s.inner[0]}x${s.inner[1]} css`);
-if (lost <= 1) ok("edge to edge: no system bars over the game");
-else
+console.log(`  safe-area insets in design px: t${s.safe.top.toFixed(0)} r${s.safe.right.toFixed(0)} b${s.safe.bottom.toFixed(0)} l${s.safe.left.toFixed(0)}`);
+if (lostX <= 1 && lostY <= 1) ok("edge to edge: nothing between the game and the glass");
+else {
   note(
-    `${lost} css px (${Math.round(lost * s.dpr)} device px) go to the system bars; scale ` +
-      `${s.vp.scale} where edge-to-edge would be ${full.toFixed(4)} (+${((full / s.vp.scale - 1) * 100).toFixed(1)}%)`,
+    `${lostY} css px vertically and ${lostX} horizontally go to system chrome ` +
+      `(${Math.round(lostY * s.dpr)}x${Math.round(lostX * s.dpr)} device px); scale ${s.vp.scale} ` +
+      `where edge-to-edge would be ${full.toFixed(4)} (+${((full / s.vp.scale - 1) * 100).toFixed(1)}%)`,
   );
+  // Horizontal chrome in landscape is the display cutout and the navigation
+  // bar, which only appear beside the game because the app never declared it
+  // handles them. That is a manifest decision, not a layout one.
+  if (lostX > 1 && s.safe.left < 1 && s.safe.right < 1)
+    note(
+      `${lostX} css px sit beside the game with env(safe-area-inset-left/right) both 0 - the ` +
+        `window is being letterboxed away from the cutout rather than drawing under it. ` +
+        `viewport-fit=cover cannot reach it; it needs layoutInDisplayCutoutMode on the Android side.`,
+    );
+}
 
 
 // ---------------------------------------------------------------------------
@@ -164,23 +216,54 @@ else
 // the real input stack, lands where the pillarbox maths says it should.
 console.log(`\n=== touch -> design space ===`);
 s = await read();
+// Where the WebView sits on the physical screen is NOT assumable, and assuming
+// it is how this check first reported a 77 px error that was entirely its own:
+// a Galaxy A73 in landscape puts 84 css px of display cutout and navigation bar
+// BESIDE the game and all 30 px of its vertical chrome at the top, where an
+// emulator has no cutout and splits its bars evenly. So solve the device-px ->
+// css-px map out of the taps themselves, and then assert only what is actually
+// a claim about the game: that the map is the device pixel ratio, and that each
+// tap's design coordinate is its client coordinate put through the viewport's
+// own pillarbox transform.
+const taps = [];
+const [DW, DH] = displaySize();
+console.log(`  display is ${DW}x${DH} device px in its current rotation`);
 for (const [fx, fy] of [[0.5, 0.5], [0.25, 0.3], [0.8, 0.75]]) {
-  const dx = Math.round(s.screen[0] * s.dpr * fx);
-  const dy = Math.round(s.screen[1] * s.dpr * fy);
+  const dx = Math.round(DW * fx);
+  const dy = Math.round(DH * fy);
+  await page.evaluate(() => { window.__raw.length = 0; });
   adb("shell", "input", "tap", String(dx), String(dy));
   await sleep(700);
-  const got = await page.evaluate(() => ({ x: game.pointer.x, y: game.pointer.y, touch: game.pointer.touch }));
-  // Predict from the measured geometry: the webview sits `lost*dpr` below the
-  // top of the screen when the status bar is the only chrome above it.
-  const topPx = (s.screen[1] - s.inner[1]) * s.dpr * 0.5;
-  const want = {
-    x: (dx / s.dpr - s.vp.ox) / s.vp.scale,
-    y: ((dy - topPx) / s.dpr - s.vp.oy) / s.vp.scale,
-  };
-  const err = Math.hypot(got.x - want.x, got.y - want.y);
-  if (err < 4) ok(`tap ${dx},${dy} -> design (${got.x.toFixed(1)}, ${got.y.toFixed(1)}), ${err.toFixed(2)} px from predicted`);
-  else bad(`tap ${dx},${dy} -> design (${got.x.toFixed(1)}, ${got.y.toFixed(1)}), predicted (${want.x.toFixed(1)}, ${want.y.toFixed(1)}) - off by ${err.toFixed(1)} px`);
+  const got = await page.evaluate(() => ({
+    raw: window.__raw[0] ?? null,
+    x: game.pointer.x, y: game.pointer.y, touch: game.pointer.touch,
+  }));
+  if (!got.raw) { bad(`tap ${dx},${dy} never reached the page as a pointer event`); continue; }
+  if (got.raw.type !== "touch") bad(`tap ${dx},${dy} arrived as pointerType "${got.raw.type}", not "touch"`);
   if (!got.touch) bad("game.pointer.touch is false after a real touch");
+  taps.push({ dx, dy, ...got });
+}
+
+if (taps.length >= 2) {
+  const a = taps[0];
+  const b = taps[taps.length - 1];
+  const kx = (b.dx - a.dx) / (b.raw.cx - a.raw.cx);
+  const ky = (b.dy - a.dy) / (b.raw.cy - a.raw.cy);
+  const ox = a.dx - a.raw.cx * kx;
+  const oy = a.dy - a.raw.cy * ky;
+  console.log(`  webview sits at ${ox.toFixed(0)},${oy.toFixed(0)} device px on a ${DW}x${DH} display`);
+  if (Math.abs(kx / s.dpr - 1) < 0.01 && Math.abs(ky / s.dpr - 1) < 0.01)
+    ok(`touch scales by the device pixel ratio (${kx.toFixed(3)}, ${ky.toFixed(3)} vs dpr ${s.dpr})`);
+  else bad(`touch scales by ${kx.toFixed(3)}, ${ky.toFixed(3)} but devicePixelRatio is ${s.dpr}`);
+}
+
+for (const t of taps) {
+  const want = { x: (t.raw.cx - s.vp.ox) / s.vp.scale, y: (t.raw.cy - s.vp.oy) / s.vp.scale };
+  const err = Math.hypot(t.x - want.x, t.y - want.y);
+  if (err < 1)
+    ok(`tap ${t.dx},${t.dy} -> css (${t.raw.cx}, ${t.raw.cy}) -> design (${t.x.toFixed(1)}, ${t.y.toFixed(1)}), ${err.toFixed(2)} px off the pillarbox transform`);
+  else
+    bad(`tap ${t.dx},${t.dy}: game says design (${t.x.toFixed(1)}, ${t.y.toFixed(1)}), the pillarbox transform of css (${t.raw.cx}, ${t.raw.cy}) says (${want.x.toFixed(1)}, ${want.y.toFixed(1)}) - off by ${err.toFixed(1)}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -190,8 +273,8 @@ await sleep(2200);
 shot("dv-03-gameplay.png");
 await page.evaluate(() => { game.input.scheme = "drag"; });
 
-const AX = Math.round(s.screen[0] * s.dpr * 0.3);
-const AY = Math.round(s.screen[1] * s.dpr * 0.6);
+const AX = Math.round(DW * 0.3);
+const AY = Math.round(DH * 0.6);
 const TRAVEL = Math.round(80 * s.dpr); // 80 css px: well past the 12 px deadzone
 for (const [dx, dy, label, want] of [
   [TRAVEL, 0, "right", 0],
@@ -234,9 +317,10 @@ else bad("an 8 css px nudge steered - the deadzone is not holding");
 // time, so this goes in as WebView touch points: the Android stack is proven
 // above, what is under test here is the game's two-finger rule.
 const cdp = await page.createCDPSession();
-const top = (s.screen[1] - s.inner[1]) * s.dpr * 0.5;
-const P1 = { x: AX / s.dpr, y: (AY - top) / s.dpr, id: 1 };
-const P2 = { x: (AX + TRAVEL * 3) / s.dpr, y: (AY - top - TRAVEL) / s.dpr, id: 2 };
+// CDP touch points are css px inside the page, so they need no screen geometry
+// at all - place them relative to the viewport directly.
+const P1 = { x: s.inner[0] * 0.3, y: s.inner[1] * 0.6, id: 1 };
+const P2 = { x: s.inner[0] * 0.7, y: s.inner[1] * 0.3, id: 2 };
 await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [P1] });
 await sleep(180);
 const b1 = await page.evaluate(() => game.input.boost);
@@ -338,6 +422,7 @@ else bad(`${errs.length} uncaught error(s): ${errs.slice(0, 3).map((e) => e.msg)
 
 await browser.disconnect();
 release();
+wake();
 
 if (notes.length) console.log(`\n${notes.length} note(s) above are informational, not failures.`);
 console.log(`\n${failures === 0 ? "RESULT: PASS" : `RESULT: FAIL (${failures})`}`);

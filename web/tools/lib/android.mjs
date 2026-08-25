@@ -93,3 +93,60 @@ export function setRotation(r) {
   adb("shell", "settings", "put", "system", "accelerometer_rotation", "0");
   adb("shell", "settings", "put", "system", "user_rotation", String(r));
 }
+
+/**
+ * The display's size in device px **in its current rotation**.
+ *
+ * Not `screen.width/height` from the page: those follow the rotation on an
+ * emulator but revert to the natural orientation on a real phone whose display
+ * has slept, so coordinates derived from them get injected into portrait space
+ * on a landscape screen and land outside the window. `wm size` reports the
+ * physical (natural) size for the same reason; `dumpsys window displays` is the
+ * one that carries the rotated `cur=`.
+ */
+export function displaySize() {
+  const cur = adb("shell", "dumpsys", "window", "displays").stdout.match(/cur=(\d+)x(\d+)/);
+  if (cur) return [Number(cur[1]), Number(cur[2])];
+  const phys = adb("shell", "wm", "size").stdout.match(/(\d+)x(\d+)/);
+  return phys ? [Number(phys[1]), Number(phys[2])] : null;
+}
+
+/**
+ * Wake the screen and hold it awake for the run.
+ *
+ * A sleeping display does not merely make screengrabs black: it sets the page
+ * to `visibilityState: "hidden"`, which stops requestAnimationFrame, which
+ * freezes `game.time` - indistinguishable from the rotation crash this harness
+ * exists to catch unless you check. Returns a restore function; call it.
+ */
+export function keepAwake() {
+  adb("shell", "input", "keyevent", "KEYCODE_WAKEUP");
+  adb("shell", "wm", "dismiss-keyguard");
+  adb("shell", "svc", "power", "stayon", "true");
+  // `stayon` only helps while the device counts as charging, and a 30 s screen
+  // timeout will re-lock the phone in the middle of a run, so raise it too and
+  // put it back afterwards.
+  const previous = adb("shell", "settings", "get", "system", "screen_off_timeout").stdout.trim();
+  adb("shell", "settings", "put", "system", "screen_off_timeout", "900000");
+  return () => {
+    adb("shell", "svc", "power", "stayon", "false");
+    if (/^\d+$/.test(previous)) {
+      adb("shell", "settings", "put", "system", "screen_off_timeout", previous);
+    }
+  };
+}
+
+/**
+ * Is a lock screen in front of the app?
+ *
+ * This matters more than it sounds. A locked phone still reports the screen on,
+ * awake, and the app as the top activity of its task - but the page is
+ * `visibilityState: "hidden"`, so requestAnimationFrame never fires and
+ * `game.time` never moves. That is indistinguishable from the rotation crash
+ * unless you look. `wm dismiss-keyguard` cannot pass a PIN or pattern, so the
+ * only fix is a human unlocking the device.
+ */
+export function isLocked() {
+  const w = adb("shell", "dumpsys", "window").stdout;
+  return /isKeyguardShowing=true/.test(w) || /mDreamingLockscreen=true/.test(w);
+}

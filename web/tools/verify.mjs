@@ -7,6 +7,7 @@
  *   - the frame is not blank (pixel variance, same idea as screenshot.py)
  *   - synthetic touch input reaches the game and moves the steering target
  *   - sustained fill cost over a measured window, per megapixel
+ *   - the game loop survives a resize (rotation), checked separately
  * Run at several viewport sizes, including a phone and an iPad.
  *
  * WebGL here is SwiftShader, a software rasteriser, so absolute frame times are
@@ -360,6 +361,94 @@ async function checkSceneReuse(browser) {
   await page.close();
 }
 
+/**
+ * A resize must not stop the clock.
+ *
+ * Resizing tears down and rebuilds frame-sized GPU resources, and Pixi is
+ * unforgiving about the order: destroying a texture that is still bound to a
+ * filter makes its bind group destroy itself, after which any rebind throws.
+ * The throw surfaces inside `Ticker.update`, which requests the next frame
+ * only after its listeners return - so a single bad resize does not glitch,
+ * it stops the game permanently, with the last good frame still on screen and
+ * every bit of engine state still reading correct. That is the worst possible
+ * failure shape: nothing looks broken from the inside.
+ *
+ * A phone rotation is exactly this resize, which is why it hung on the first
+ * emulator run and why this is a gate. The assertion is deliberately not about
+ * pixels or about any named field: it is that `game.time` is still moving
+ * afterwards. Nothing else survives minification, and nothing else is the
+ * actual requirement.
+ */
+async function checkResizeSurvival(browser) {
+  console.log(`\n=== resize survival (the loop must outlive a rotation) ===`);
+  const page = await browser.newPage();
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(String(e)));
+  page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
+
+  await page.setViewport({ width: 1280, height: 720, deviceScaleFactor: 1 });
+  await page.goto(`http://localhost:${PORT}/`, { waitUntil: "networkidle2", timeout: 30000 });
+  const booted = await page
+    .waitForFunction("!!window.game && window.game.time > 0.2", { timeout: 15000 })
+    .then(() => true)
+    .catch(() => false);
+  if (!booted) {
+    bad("game did not boot for the resize check");
+    await page.close();
+    return;
+  }
+
+  // The bug this gates lives in frame-sized post-processing resources, so the
+  // check is worthless unless those passes are actually live. Say so rather
+  // than passing quietly on a stack that was never exercised.
+  const fx = await page.evaluate(() => ({
+    grain: !!window.game.post?.fx?.grainEnabled,
+    bloom: !!window.game.post?.fx?.bloomEnabled,
+    crt: !!window.game.post?.fx?.scanlinesEnabled,
+  }));
+  if (!fx.grain || !fx.bloom) {
+    bad(`post passes not live for the resize check (grain ${fx.grain}, bloom ${fx.bloom})`);
+    await page.close();
+    return;
+  }
+
+  // Let the passes paint at the boot size first: the crash needs resources
+  // that already exist, so resizing before the first frame would prove nothing.
+  await new Promise((r) => setTimeout(r, 900));
+
+  const steps = [
+    { name: "landscape -> portrait", w: 393, h: 851, dpr: 3 },
+    { name: "portrait -> landscape", w: 851, h: 393, dpr: 3 },
+    { name: "nudge (window drag)", w: 848, h: 393, dpr: 3 },
+    { name: "landscape -> desktop", w: 1600, h: 900, dpr: 1 },
+  ];
+
+  let prev = await page.evaluate(() => window.game.time);
+  for (const step of steps) {
+    await page.setViewport({ width: step.w, height: step.h, deviceScaleFactor: step.dpr });
+    await new Promise((r) => setTimeout(r, 800));
+    const after = await page.evaluate(() => ({
+      time: window.game.time,
+      sw: window.game.viewport.screenW,
+      sh: window.game.viewport.screenH,
+      cw: window.game.app.canvas.width,
+    }));
+    const advanced = after.time - prev;
+    if (advanced > 0.1) ok(`${step.name}: loop alive (+${advanced.toFixed(2)}s)`);
+    else bad(`${step.name}: LOOP STOPPED (game.time stuck at ${after.time.toFixed(2)})`);
+    // A resize the page silently ignored would keep the clock running and
+    // prove nothing, so require that the new size actually landed.
+    if (after.sw === step.w && after.sh === step.h) ok(`${step.name}: viewport took ${step.w}x${step.h}`);
+    else bad(`${step.name}: viewport is ${after.sw}x${after.sh}, expected ${step.w}x${step.h}`);
+    prev = after.time;
+  }
+
+  if (errors.length === 0) ok("no page or console errors across the resizes");
+  else bad(`${errors.length} error(s) during resize: ${errors.slice(0, 3).join(" | ")}`);
+
+  await page.close();
+}
+
 const server = await serve(DIST);
 const browser = await puppeteer.launch({
   executablePath: CHROME,
@@ -369,6 +458,7 @@ const browser = await puppeteer.launch({
 try {
   for (const d of DEVICES) await run(browser, d);
   await checkSceneReuse(browser);
+  await checkResizeSurvival(browser);
 } finally {
   await browser.close();
   server.close();

@@ -173,14 +173,34 @@ export class GrainFilter extends Filter {
     return Math.max(2, Math.round(v)) + GRAIN_JITTER;
   }
 
+  /**
+   * Free the layers - unbinding them FIRST, which is not a stylistic choice.
+   *
+   * A Pixi `BindGroup` subscribes to `change` on every resource it holds, and
+   * `TextureSource.destroy()` sets `destroyed = true` and then emits `change`.
+   * The listener sees a destroyed resource and destroys the bind group, which
+   * nulls its own `resources` array - so destroying a texture that is still
+   * bound leaves this filter permanently unbindable, and the next
+   * `this.resources.x = ...` throws `Cannot read properties of null` from
+   * inside `BindGroup.setResource`.
+   *
+   * That throw lands in `Ticker.update`, which requests the next frame only
+   * after its listeners return, so the whole game loop stops for good. The
+   * only trigger needed is a frame-size change with layers already built:
+   * dragging a desktop window edge, or rotating a phone.
+   *
+   * Rebinding to `Texture.EMPTY` first is the fix, because `setResource`
+   * detaches the listener from the resource it replaces. By the time the
+   * layers are destroyed, nothing is watching them.
+   */
   private dropLayers(): void {
+    this.resources.uGrainTexture = Texture.EMPTY.source;
+    this.resources.uGrainSampler = Texture.EMPTY.source.style;
     for (const tex of this.layers) tex.destroy(true);
     this.layers.length = 0;
     this.layerW = 0;
     this.layerH = 0;
     this.current = -1;
-    this.resources.uGrainTexture = Texture.EMPTY.source;
-    this.resources.uGrainSampler = Texture.EMPTY.source.style;
   }
 
   override destroy(destroyPrograms?: boolean): void {

@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "verify": "node tools/verify.mjs dist"
+    "verify": "node tools/verify.mjs dist",
+    "verify:device": "node tools/device-verify.mjs"
   },
   "dependencies": {
     "pixi.js": "^8.6.0"

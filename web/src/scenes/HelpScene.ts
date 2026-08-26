@@ -78,12 +78,69 @@ const LISSA_A = 1.25;
 const LISSA_B = 0.83;
 const LISSA_MARGIN = 46.0;
 
-const CONTROLS: ReadonlyArray<readonly [string, string, string]> = [
+type ControlRow = readonly [string, string, string];
+
+/**
+ * The control rows, per scheme.
+ *
+ * This screen used to teach a mouse to everybody, including a phone player
+ * holding a device with no right button and no Escape key - caught on a real
+ * Android device. The rows are chosen from `game.input.scheme` every frame, so
+ * pairing a mouse mid-session re-teaches the right thing.
+ *
+ * `drag` and `offset` differ only in the first row, and the difference is real:
+ * on a phone the finger steers by ANGLE from wherever it touched down, on a
+ * tablet the aim point leads the finger. Everything after it is shared.
+ */
+const CONTROLS_MOUSE: ReadonlyArray<ControlRow> = [
   ["move", "MOVE THE MOUSE", "The head always turns toward your cursor."],
   ["right", "HOLD RIGHT BUTTON", "Spend stamina for a burst of speed."],
   ["left", "LEFT CLICK", "Every menu and button is mouse-driven."],
   ["esc", "ESC", "Pause the run - or click PAUSE in the HUD."],
 ];
+
+const CONTROLS_DRAG: ReadonlyArray<ControlRow> = [
+  ["drag", "DRAG ANYWHERE", "The head follows the angle you drag, not the spot."],
+  ["boost", "SECOND FINGER", "Spend stamina for a burst of speed."],
+  ["tap", "TAP", "Every menu and button takes a tap."],
+  ["pause", "PAUSE", "Tap PAUSE in the HUD to stop the run."],
+];
+
+const CONTROLS_OFFSET: ReadonlyArray<ControlRow> = [
+  ["drag", "TOUCH TO STEER", "The aim point leads your finger, so it stays visible."],
+  ...CONTROLS_DRAG.slice(1),
+];
+
+/**
+ * Every scheme must have the SAME number of rows.
+ *
+ * The scene is retained-mode: the labels are built once in the constructor and
+ * only their text changes per frame. A scheme with a different row count would
+ * silently run off the end of `ctrlLabels`.
+ */
+const CONTROL_ROWS = 4;
+
+function controlsFor(scheme: string): ReadonlyArray<ControlRow> {
+  if (scheme === "drag") return CONTROLS_DRAG;
+  if (scheme === "offset") return CONTROLS_OFFSET;
+  return CONTROLS_MOUSE;
+}
+
+/** The one-line summary under the title, and the demo caption. */
+const BLURBS: Record<string, { header: string; demo: string }> = {
+  mouse: {
+    header: "steer with the mouse - everything else is a bonus",
+    demo: "this reticle is your mouse - the head chases it",
+  },
+  drag: {
+    header: "drag to steer - everything else is a bonus",
+    demo: "the head chases this reticle - your drag angle aims it",
+  },
+  offset: {
+    header: "touch to steer - everything else is a bonus",
+    demo: "the head chases this reticle - it leads your finger",
+  },
+};
 
 const HAZARDS: ReadonlyArray<readonly [string, string, string]> = [
   ["wall", "WALLS", "Solid neon slabs. A touch costs a life."],
@@ -146,6 +203,18 @@ function polyPath(
 }
 
 export class HelpScene extends Scene {
+  /**
+   * Which control scheme to teach, read every frame rather than cached.
+   *
+   * `InputManager.refreshScheme` can change it on a rotation (a tablet-sized
+   * window and a phone-sized one steer differently), and a mouse paired to a
+   * tablet flips it outright - so a value latched in the constructor would
+   * teach the wrong controls for the rest of the session.
+   */
+  private get scheme(): string {
+    return this.game.input?.scheme ?? "mouse";
+  }
+
   readonly root = new Container();
 
   private readonly sound: Audio | null;
@@ -212,7 +281,7 @@ export class HelpScene extends Scene {
     this.keyCapLabel = new Label(fonts, fonts.tiny);
 
     // Two labels per control and hazard row, three per power-up.
-    for (let i = 0; i < CONTROLS.length * 2; i++) {
+    for (let i = 0; i < CONTROL_ROWS * 2; i++) {
       this.ctrlLabels.push(new Label(fonts, i % 2 === 0 ? fonts.small : fonts.tiny));
     }
     for (let i = 0; i < HAZARDS.length * 2; i++) {
@@ -437,7 +506,7 @@ export class HelpScene extends Scene {
     const rows: Array<[string, number, number, "left" | "right", RGB]> = [
       ["HOW TO PLAY", PAD, 18, "left", mix(theme.accent, UI_WHITE, 0.35)],
       [
-        "steer with the mouse - everything else is a bonus",
+        (BLURBS[this.scheme] ?? BLURBS["mouse"]!).header,
         PAD + 4,
         64,
         "left",
@@ -526,7 +595,7 @@ export class HelpScene extends Scene {
     this.demoView.draw(snake, theme, t, {});
     this.drawFakeCursor(this.cursorX, this.cursorY, theme, t);
 
-    this.demoCaption.set("this reticle is your mouse - the head chases it");
+    this.demoCaption.set((BLURBS[this.scheme] ?? BLURBS["mouse"]!).demo);
     this.demoCaption.setColor(shade(theme.textDim, 1.05));
     this.demoCaption.place(
       DEMO_PANEL.x + DEMO_PANEL.w * 0.5,
@@ -593,12 +662,15 @@ export class HelpScene extends Scene {
     const rowH = 42;
     const top = CTRL_PANEL.y + 44;
     this.keyCapLabel.visible = false;
-    CONTROLS.forEach(([key, caption, blurb], i) => {
+    controlsFor(this.scheme).forEach(([key, caption, blurb], i) => {
       const ry = top + i * rowH;
       const icx = CTRL_PANEL.x + 42;
       const icy = ry + 20;
       if (key === "esc") this.drawKeyIcon(icx, icy, theme, "ESC", t, i);
-      else this.drawMouseIcon(icx, icy, theme, key, t, i);
+      else if (key === "pause") this.drawKeyIcon(icx, icy, theme, "II", t, i);
+      else if (key === "drag" || key === "boost" || key === "tap") {
+        this.drawTouchIcon(icx, icy, theme, key, t, i);
+      } else this.drawMouseIcon(icx, icy, theme, key, t, i);
 
       const cap = this.ctrlLabels[i * 2]!;
       cap.set(caption);
@@ -668,6 +740,62 @@ export class HelpScene extends Scene {
           arcPath(g, x, cy, 9, a0, a1).stroke({ color: col, width: 2 });
         }
       }
+    }
+  }
+
+  /**
+   * A touch contact: the phone counterpart of the mouse body.
+   *
+   * "drag" deliberately draws what the scheme actually does - an anchor ring
+   * where the finger went down, a contact dot away from it, and the line
+   * between them - because it is the ANGLE of that line that steers and the
+   * distance means nothing. A picture of a finger would not say that.
+   */
+  private drawTouchIcon(
+    cx: number,
+    cy: number,
+    theme: Theme,
+    kind: string,
+    t: number,
+    slot: number,
+  ): void {
+    const g = this.icons;
+    const dim = shade(theme.textDim, 0.9);
+    const glowSprite = this.iconGlows[slot]!;
+    glowSprite.visible = false;
+
+    if (kind === "drag") {
+      const a = t * 1.6;
+      const fx = cx + Math.cos(a) * 10;
+      const fy = cy + Math.sin(a) * 10;
+      glowSprite.position.set(fx, fy);
+      setUiGlow(glowSprite, 15, theme.accent, 0.5 + 0.25 * pulse(t, 3.0));
+      g.circle(cx, cy, 5).stroke({ color: toHex(mix(dim, UI_WHITE, 0.3)), width: 2 });
+      g.moveTo(cx, cy)
+        .lineTo(fx, fy)
+        .stroke({ color: toHex(shade(theme.accent, 0.85)), width: 2 });
+      g.circle(fx, fy, 5.5).fill({ color: toHex(mix(theme.accent, UI_WHITE, 0.35)) });
+      return;
+    }
+
+    if (kind === "boost") {
+      glowSprite.position.set(cx + 8, cy);
+      setUiGlow(glowSprite, 15, UI_WARN, 0.5 + 0.35 * pulse(t, 3.2));
+      g.circle(cx - 8, cy, 5.5).fill({ color: toHex(mix(dim, UI_WHITE, 0.45)) });
+      g.circle(cx + 8, cy, 5.5).fill({ color: toHex(mix(UI_WARN, UI_WHITE, 0.3)) });
+      return;
+    }
+
+    // "tap": one contact, with rings leaving it.
+    glowSprite.position.set(cx, cy);
+    setUiGlow(glowSprite, 14, theme.accent, 0.35 + 0.2 * pulse(t, 2.6));
+    g.circle(cx, cy, 5.5).fill({ color: toHex(mix(theme.accent, UI_WHITE, 0.35)) });
+    for (let k = 0; k < 2; k++) {
+      const f = (t * 0.9 + k * 0.5) % 1;
+      g.circle(cx, cy, 7 + f * 9).stroke({
+        color: toHex(shade(theme.accent, 0.9 * (1 - f))),
+        width: 2,
+      });
     }
   }
 

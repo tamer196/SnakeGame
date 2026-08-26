@@ -57,6 +57,16 @@ export interface LevelDef {
   /** True when the arena edges teleport instead of killing. */
   readonly wrapWalls: boolean;
   readonly hint: string;
+  /**
+   * The same hint written for a touch device, or null to reuse `hint`.
+   *
+   * The Python is mouse-only, so its `hint` names a mouse and a right
+   * button. Rewriting it in place would lose the parity text; carrying a
+   * second string keeps both and lets the scene pick by control scheme.
+   * Only level 1 needs one - it is the only hint of the twelve that names
+   * an input device at all.
+   */
+  readonly hintTouch: string | null;
 
   // -- derived (mirrors of the Python properties/methods) -------------------
   /** One-based level number, for display. */
@@ -144,6 +154,14 @@ function readStr(src: RawRecord, key: string, where: string): string {
   const v = need(src, key, where);
   if (typeof v === "string") return v;
   throw new Error(`levels.json: ${where}."${key}" is not a string`);
+}
+
+/** An optional string: absent is a legal answer, a wrong type is not. */
+function readOptStr(src: RawRecord, key: string): string | null {
+  const v = src[key];
+  if (v === undefined || v === null) return null;
+  if (typeof v === "string") return v;
+  throw new Error(`levels.json: "${key}" is present but not a string`);
 }
 
 function readBool(src: RawRecord, key: string, where: string): boolean {
@@ -240,6 +258,7 @@ function buildLevel(src: RawRecord, position: number, total: number): LevelDef {
     powerupsEnabled: readBool(src, "powerupsEnabled", where),
     wrapWalls: readBool(src, "wrapWalls", where),
     hint: readStr(src, "hint", where),
+    hintTouch: readOptStr(src, "hintTouch"),
 
     number: index + 1,
     difficultyRating: clamp(index / Math.max(1.0, total - 1), 0.0, 1.0),

@@ -61,15 +61,35 @@ export class Viewport {
     // the two never disagree on screen.
     const ratio = Math.max(1, Math.min(dpr || 1, 3));
 
-    const scale = Math.min(w / WINDOW_W, h / WINDOW_H);
-    const offsetX = (w - WINDOW_W * scale) * 0.5;
-    const offsetY = (h - WINDOW_H * scale) * 0.5;
+    // The design box is fitted inside the SAFE area, not the raw screen, and
+    // this is load-bearing rather than tidy. Going edge-to-edge on Android puts
+    // the window under the display cutout and the navigation bar; on a 19.5:9
+    // phone the pillarbox bars happen to be wide enough to swallow both, but on
+    // a 16:9 one the fit is height-limited, there are no bars, and a cutout
+    // would land squarely on the HUD. Fitting to the safe rect is the only
+    // version that holds for every aspect.
+    //
+    // `overscan` is deliberately still the WHOLE screen: backgrounds and the
+    // post chain fill to the glass, including under the cutout. Only the
+    // 1280x720 box of gameplay and HUD is inset.
+    const ins = insets ?? { top: 0, right: 0, bottom: 0, left: 0 };
+    const availW = Math.max(1, w - ins.left - ins.right);
+    const availH = Math.max(1, h - ins.top - ins.bottom);
+
+    const scale = Math.min(availW / WINDOW_W, availH / WINDOW_H);
+    const offsetX = ins.left + (availW - WINDOW_W * scale) * 0.5;
+    const offsetY = ins.top + (availH - WINDOW_H * scale) * 0.5;
 
     const changed =
       w !== this.screenW ||
       h !== this.screenH ||
       ratio !== this.dpr ||
-      scale !== this.scale;
+      scale !== this.scale ||
+      // Insets can move the box without changing its size - a phone rotated so
+      // the cutout swaps sides is exactly that - and the scene tree has to be
+      // told, or it keeps drawing at the old offset.
+      offsetX !== this.offsetX ||
+      offsetY !== this.offsetY;
 
     this.screenW = w;
     this.screenH = h;

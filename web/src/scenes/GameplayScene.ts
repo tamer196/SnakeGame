@@ -300,7 +300,13 @@ export class GameplayScene extends Scene implements GameplayPresenter {
       levelNumber: world.level.number,
       levelName: world.level.name,
       levelSubtitle: world.level.subtitle,
-      levelHint: world.level.hint,
+      // Level 1's hint is the only one that names an input device, and the
+      // Python it came from names a mouse. Telling a phone player to hold the
+      // right button is worse than saying nothing.
+      levelHint:
+        this.game.input?.scheme === "mouse"
+          ? world.level.hint
+          : world.level.hintTouch ?? world.level.hint,
       goalFood: world.level.goalFood,
       difficultyLabel: world.diff.hudLabel,
       difficultyColor: world.diff.color,

@@ -9,10 +9,19 @@
         android:supportsRtl="true"
         android:theme="@style/AppTheme">
 
+        <!--
+            The game is authored in a 1280x720 landscape design space. Left to
+            free-rotate it boots into portrait, where the player meets the
+            page's ROTATE YOUR DEVICE overlay instead of the game; sensorLandscape
+            lets the device turn itself the right way round and keeps both
+            landscape orientations available. The web build keeps that overlay
+            for mobile browsers, where there is no manifest to do this.
+        -->
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
             android:name=".MainActivity"
             android:label="@string/title_activity_main"
+            android:screenOrientation="sensorLandscape"
             android:theme="@style/AppTheme.NoActionBarLaunch"
             android:launchMode="singleTask"
             android:exported="true">

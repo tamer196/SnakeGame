@@ -118,6 +118,17 @@ const read = () =>
       pillar: game.viewport.hasPillarbox, letter: game.viewport.hasLetterbox,
     },
     safe: { ...game.viewport.safe },
+    // The raw css insets the page sees, not the design-unit mirror: the fit
+    // check below has to recompute the viewport's own arithmetic from its
+    // inputs, and the mirror is already an output.
+    safeCss: (() => {
+      const st = getComputedStyle(document.documentElement);
+      const r = (n) => {
+        const v = parseFloat(st.getPropertyValue(n));
+        return Number.isFinite(v) ? v : 0;
+      };
+      return { top: r("--safe-top"), right: r("--safe-right"), bottom: r("--safe-bottom"), left: r("--safe-left") };
+    })(),
     errs: window.__errs.length,
   }));
 
@@ -174,19 +185,53 @@ else
 // ---------------------------------------------------------------------------
 console.log(`\n=== rotation survival ===`);
 shot("dv-01-landscape.png");
+let everResized = false;
 for (const [label, r] of [["portrait", 0], ["landscape", 1], ["portrait", 0], ["landscape", 1]]) {
-  const before = (await read()).time;
+  const start = await read();
+  const before = start.time;
   setRotation(r);
   await sleep(2600);
   const now = await read();
+  if (now.inner[0] !== start.inner[0] || now.inner[1] !== start.inner[1]) everResized = true;
   if (now.time - before > 0.5) ok(`-> ${label.padEnd(9)} loop alive (+${(now.time - before).toFixed(2)}s), scale ${now.vp.scale} ox ${now.vp.ox} oy ${now.vp.oy}`);
   else bad(`-> ${label}: LOOP STOPPED (game.time stuck at ${now.time})`);
-  const wantPillar = now.inner[0] / now.inner[1] > 1280 / 720;
-  if (now.vp.pillar === wantPillar && now.vp.letter !== wantPillar)
-    ok(`-> ${label.padEnd(9)} letterboxed the right way (${wantPillar ? "pillarbox" : "letterbox"})`);
-  else bad(`-> ${label}: pillar ${now.vp.pillar} letter ${now.vp.letter} for a ${(now.inner[0] / now.inner[1]).toFixed(2)}:1 viewport`);
+  // Not "is it pillarboxed": once a display cutout puts an inset on one side,
+  // a viewport can be pillarboxed AND letterboxed at once and that is correct.
+  // Gate the arithmetic instead - the design box fitted inside the SAFE rect
+  // and centred in it - which is the property that actually has to hold.
+  const availW = now.inner[0] - now.safeCss.left - now.safeCss.right;
+  const availH = now.inner[1] - now.safeCss.top - now.safeCss.bottom;
+  const wantScale = Math.min(availW / 1280, availH / 720);
+  const wantOx = now.safeCss.left + (availW - 1280 * wantScale) * 0.5;
+  const wantOy = now.safeCss.top + (availH - 720 * wantScale) * 0.5;
+  const off = Math.max(
+    Math.abs(now.vp.scale - wantScale) * 1000,
+    Math.abs(now.vp.ox - wantOx),
+    Math.abs(now.vp.oy - wantOy),
+  );
+  const ins = `insets t${now.safeCss.top} r${now.safeCss.right} b${now.safeCss.bottom} l${now.safeCss.left}`;
+  if (off < 0.6)
+    ok(`-> ${label.padEnd(9)} design box fits the safe rect (${ins})`);
+  else
+    bad(
+      `-> ${label}: viewport says scale ${now.vp.scale} at ${now.vp.ox},${now.vp.oy}; fitting ` +
+        `1280x720 into the safe rect gives ${wantScale.toFixed(4)} at ${wantOx.toFixed(1)},${wantOy.toFixed(1)} (${ins})`,
+    );
 }
 shot("dv-02-after-rotations.png");
+// Say it out loud when this section proved nothing. An activity pinned to
+// sensorLandscape ignores `user_rotation` entirely, so the window never
+// changes size and "loop alive" is trivially true - which is the correct
+// behaviour for this game and also the end of this check's usefulness. The
+// resize crash it was written for stays covered by verify.mjs's
+// resize-survival section, headless, where the window really does change.
+if (!everResized) {
+  note(
+    `the window never changed size across four rotation requests - the activity is ` +
+      `orientation-locked, so this section is inert here. Resize survival is gated by ` +
+      `\`npm run verify\` instead.`,
+  );
+}
 
 // ---------------------------------------------------------------------------
 console.log(`\n=== screen budget ===`);

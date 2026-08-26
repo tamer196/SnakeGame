@@ -14,6 +14,7 @@
       "powerupsEnabled": false,
       "wrapWalls": true,
       "hint": "Move the mouse to steer, hold right-click to boost. The edges wrap.",
+      "hintTouch": "Drag anywhere to steer, second finger to boost. The edges wrap.",
       "cruiseSpeed": 210.0,
       "baseSpeed": 210.0,
       "parScore": 80,

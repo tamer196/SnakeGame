@@ -56,7 +56,10 @@ export class Viewport {
   resize(screenW: number, screenH: number, dpr: number, insets?: SafeInsets): boolean {
     const w = Math.max(1, Math.floor(screenW));
     const h = Math.max(1, Math.floor(screenH));
-    const ratio = Math.max(1, Math.min(dpr || 1, 3)); // cap: 3x costs fill rate for nothing
+    // Reported, not spent: the renderer keeps its own cap (Game.ts), and this
+    // value only reaches the boot diagnostic readout. Clamped to the same 3 so
+    // the two never disagree on screen.
+    const ratio = Math.max(1, Math.min(dpr || 1, 3));
 
     const scale = Math.min(w / WINDOW_W, h / WINDOW_H);
     const offsetX = (w - WINDOW_W * scale) * 0.5;

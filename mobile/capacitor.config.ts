@@ -5,10 +5,9 @@ import type { CapacitorConfig } from "@capacitor/cli";
  *
  * The game is the web build, verbatim: `webDir` points at web/dist, which
  * vite already builds with `base: "./"` so it loads from the WebView's local
- * scheme unchanged. The web code detects touch by pointer capability, keeps
+ * scheme unchanged. The web code detects touch by pointer capability and keeps
  * QUIT off the menu when no shell bridge exists (mobile apps do not quit from
- * a button), and defaults bloom off on coarse pointers - so this wrapper
- * needs no plugins and no branching.
+ * a button) - so this wrapper needs no plugins and no branching.
  *
  * `appId` is a PLACEHOLDER - pick the real bundle identifier (shared with
  * desktop/'s electron-builder appId decision) before any store upload; it

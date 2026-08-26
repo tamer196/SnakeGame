@@ -10,6 +10,7 @@
  *
  *   node tools/device-verify.mjs
  *   node tools/device-verify.mjs --pkg com.example.app --shots ../captures/mobile
+ *   node tools/device-verify.mjs --headroom     # + a resolution sweep, ~1 min more
  *
  * Requires a debuggable build (the Capacitor debug APK is one) and an attached
  * device: `adb devices` must list exactly one.
@@ -157,14 +158,15 @@ console.log(`  ${env.webgl} on ${env.renderer}`);
 if (env.webgl.startsWith("WebGL 2")) ok("WebGL 2");
 else note(`WebGL 1 only - the GLSL ES 3.00 filter sources fall back; a real phone gives WebGL 2`);
 
-// Pointer capability decides both the control scheme and the bloom default, so
-// a device that misreports it changes the game, not just a media query.
-if (env.coarse) ok(`pointer: coarse -> scheme "${env.scheme}", bloom defaults off`);
+// Pointer capability picks the control scheme, so a device that misreports it
+// plays differently, not just differently-styled. (It used to decide the bloom
+// default too, until the A73 measurement retired that.)
+if (env.coarse) ok(`pointer: coarse -> scheme "${env.scheme}"`);
 else
   note(
     `pointer: coarse is FALSE (any-pointer: coarse ${env.anyCoarse}, maxTouchPoints ` +
-      `${env.maxTouchPoints}) -> scheme "${env.scheme}" and bloom ON. Emulators report a ` +
-      `fine pointer; on this device the touch scheme is unreachable by detection.`,
+      `${env.maxTouchPoints}) -> scheme "${env.scheme}". Emulators report a fine pointer; ` +
+      `on this device the touch scheme is unreachable by detection.`,
   );
 
 // ---------------------------------------------------------------------------
@@ -365,6 +367,7 @@ const measure = async (ms = 3500) =>
     gaps.sort((a, b) => a - b);
     return {
       fps: +(frames / wall).toFixed(1),
+      p50: +gaps[Math.floor(gaps.length * 0.5)].toFixed(1),
       p95: +gaps[Math.floor(gaps.length * 0.95)].toFixed(1),
       sim: +((game.time - g0) / wall).toFixed(3),
       mpx: +((game.app.canvas.width * game.app.canvas.height) / 1e6).toFixed(2),
@@ -400,21 +403,78 @@ const gain = quarter.fps / shipped.fps - 1;
 const noisy =
   runs.shipped.some((r) => Math.abs(r.fps / shipped.fps - 1) > 0.15) ||
   runs.quarter.some((r) => Math.abs(r.fps / quarter.fps - 1) > 0.15);
+// Two very different reasons a pixel cut can change nothing, and they point
+// opposite ways. Pinned at the panel's refresh rate in both configs means there
+// is headroom and `--headroom` can go and size it. The same rate well BELOW the
+// refresh rate means something other than pixels is the ceiling - an emulator's
+// per-call overhead - and the run carries no information about fill cost at all.
+const capped = shipped.fps > 55 && quarter.fps > 55;
 if (noisy) {
   note(
     `identical samples differed by more than 15% - this device is too noisy to attribute ` +
-      `anything to fill cost. Do not relax the resolution cap or the bloom default on it.`,
+      `anything to fill cost. Do not relax the resolution cap on it.`,
   );
+} else if (capped) {
+  ok(`vsync-capped at ${shipped.fps} fps in both configs, so there is headroom above the shipped settings`);
+  if (!args.headroom) note(`re-run with --headroom to find where 60 fps actually breaks and size that margin`);
 } else if (Math.abs(gain) < 0.12) {
   note(
     `a ${(shipped.mpx / quarter.mpx).toFixed(1)}x pixel cut moved the frame rate by ` +
-      `${(gain * 100).toFixed(0)}% - this device is NOT fill-bound, so it can say nothing ` +
-      `about the resolution cap or the bloom default. Do not relax either on this evidence.`,
+      `${(gain * 100).toFixed(0)}% while never reaching the refresh rate - this device is ` +
+      `bound by something other than pixels, so it can say nothing about the resolution ` +
+      `cap. Do not relax it on this evidence.`,
   );
 } else {
   note(`resolution 1 is ${(gain * 100).toFixed(0)}% faster than resolution ${env.rendererRes} - fill cost is real here`);
 }
 if (shipped.sim < 0.95) note(`sim ran at ${shipped.sim}x realtime: frames past MAX_DT (50 ms) show as slow motion, not skipped time`);
+
+// ---------------------------------------------------------------------------
+// Optional, because it takes a minute and pushes the GPU hard: raise the
+// renderer resolution with every post pass on until 60 fps breaks. The break
+// point IS the margin, and it is the only honest basis for moving a shipping
+// default. On a Galaxy A73 5G it held 60 fps to 4.73 Mpx and broke by 7.4 -
+// four times what the game actually spends - which is what retired the
+// bloom-off-on-touch default and raised the resolution cap from 2 to 3.
+if (args.headroom) {
+  console.log(`\n=== headroom (every post pass on, bloom 1.25) ===`);
+  const ALL = { vignette: true, scanlines: true, aberration: true, curvature: true, grain: true, flare: true, bloom: 1.25 };
+  // Capture the STRENGTH, not just the on/off. `setPostFlags({bloom: true})`
+  // sets `bloomEnabled` and leaves `bloomStrength` alone, so restoring with a
+  // boolean would leave the app running the sweep's 1.25 gain instead of the
+  // shipped 0.72 until the next launch.
+  const before = await page.evaluate(() => ({
+    bloom: game.post.fx.bloomEnabled ? game.post.fx.bloomStrength : false,
+    res: game.app.renderer.resolution,
+  }));
+  console.log("  resolution    Mpx    fps   p50ms  p95ms");
+  let broke = null;
+  for (const res of [2, +s.dpr.toFixed(4), 3.5, 4, 5, 6]) {
+    await page.evaluate(
+      (f, r) => {
+        game.post.fx.setPostFlags(f);
+        if (game.app.renderer.resolution !== r) game.app.renderer.resize(innerWidth, innerHeight, r);
+      },
+      ALL, res,
+    );
+    await sleep(900);
+    const r = await measure(3200);
+    if (r.fps < 55 && broke === null) broke = { res, mpx: r.mpx };
+    console.log(
+      `  ${String(res).padEnd(10)} ${String(r.mpx).padStart(6)} ${String(r.fps).padStart(6)} ` +
+        `${String(r.p50 ?? "-").padStart(7)} ${String(r.p95).padStart(6)}${r.fps < 55 ? "  <- below 60" : ""}`,
+    );
+  }
+  if (broke) note(`60 fps survives the whole post chain up to just under ${broke.mpx} Mpx (broke at resolution ${broke.res})`);
+  else note(`60 fps survived every resolution tried - the margin is larger than this sweep can reach`);
+  await page.evaluate(
+    (b) => {
+      game.post.fx.setPostFlags({ bloom: b.bloom });
+      if (game.app.renderer.resolution !== b.res) game.app.renderer.resize(innerWidth, innerHeight, b.res);
+    },
+    before,
+  );
+}
 
 const errs = await page.evaluate(() => window.__errs);
 if (errs.length === 0) ok("no uncaught page errors for the whole run");

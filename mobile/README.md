@@ -3,9 +3,8 @@
 A Capacitor shell around the web build. The game is `web/dist`, verbatim:
 vite builds with `base: "./"` so it loads from the WebView's local scheme
 unchanged, and the web code already adapts by capability — touch controls by
-pointer class, bloom defaulting off on coarse pointers, QUIT absent because
-no shell bridge exists here (mobile apps do not quit from a button). No
-plugins, no user-agent branching.
+pointer class, QUIT absent because no shell bridge exists here (mobile apps do
+not quit from a button). No plugins, no user-agent branching.
 
 ## Workflow
 
@@ -111,9 +110,43 @@ changes the game rather than just a media query:
 - **WebGL 1 only** on the android-33 image, and its bundled WebView is Chrome
   103. A real phone gives WebGL 2 and a current WebView.
 
-So the two shipping guesses — renderer resolution capped at 2, bloom off by
-default on touch — are **still guesses**. Revisit them on a mid-range phone,
-where the frame rate means something, and not before.
+So on an emulator the two shipping guesses stay guesses. They were settled on a
+phone instead — see below.
+
+## What a real phone said
+
+Galaxy A73 5G (Snapdragon 778G / Adreno 642L, Android 16, WebView 151, 60 Hz),
+`verify:device` PASS: WebGL 2, `pointer: coarse` true so the drag scheme engages
+by detection, four rotations with the loop alive, real taps landing within
+**0.06 design px** of the pillarbox transform, steering exact to **0.0°**.
+
+`--headroom` then pushed the renderer resolution with every post pass on and
+bloom at 1.25:
+
+| resolution | Mpx | fps |
+|---|---|---|
+| 2 | 1.18 | 60.3 |
+| 2.8125 (native) | 2.34 | 59.9 |
+| 3.5 | 3.62 | 60.2 |
+| **4** | **4.73** | **60.2** |
+| 5 | 7.39 | 41.8 |
+| 6 | 10.64 | 27.4 |
+
+60 fps survives the whole chain to ~4.7 Mpx and breaks by 7.4 — **four times
+what the game was actually spending** — with `p50` pinned at 16.4 ms (vsync)
+right up to the break, and no thermal decay over a sustained minute.
+
+So both guesses are retired. **Bloom now defaults ON everywhere** (the
+coarse-pointer special case is gone) and the **renderer resolution cap moves
+from 2 to 3**, which lets this phone render at its native 2.8125. Both remain
+player-toggleable, and the quality presets are still there for something
+slower.
+
+The caveat that stands: this is **one** device, a 2022 upper-mid-range on a
+60 Hz panel. A budget phone could be 3–5× slower and eat the whole margin; a
+120 Hz panel needs double the throughput for the same smoothness. Run
+`verify:device --headroom` on the cheapest phone you can find before treating
+these as settled for the fleet.
 
 ## Open item
 

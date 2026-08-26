@@ -56,7 +56,7 @@ export function findSocket(pkg) {
 }
 
 /** Force-stop, relaunch, and attach to the page. Resolves once `ready` is true. */
-export async function launchAndAttach({ pkg, activity, port, ready, timeoutMs = 45000 }) {
+export async function launchAndAttach({ pkg, activity, port, ready, timeoutMs = 45000, protocolTimeout = 90000 }) {
   adb("shell", "am", "force-stop", pkg);
   await sleep(1200);
   adb("shell", "am", "start", "-n", `${pkg}/${activity}`);
@@ -74,6 +74,9 @@ export async function launchAndAttach({ pkg, activity, port, ready, timeoutMs = 
   const browser = await puppeteer.connect({
     browserURL: `http://127.0.0.1:${port}`,
     defaultViewport: null,
+    // A page whose rAF has stalled (locked device, backgrounded app) leaves any
+    // frame-counting evaluate pending forever; fail in a minute, not three.
+    protocolTimeout,
   });
   const pages = await browser.pages();
   const page = pages.find((p) => !p.url().startsWith("devtools://")) ?? pages[0];

@@ -148,6 +148,41 @@ The caveat that stands: this is **one** device, a 2022 upper-mid-range on a
 `verify:device --headroom` on the cheapest phone you can find before treating
 these as settled for the fleet.
 
+## What this wrapper does that the web build cannot
+
+Three things the page has no way to do for itself, all found by running on a
+phone, all in `AndroidManifest.xml` and `MainActivity.java`:
+
+- **`android:screenOrientation="sensorLandscape"`.** The game is authored in a
+  1280×720 landscape space. Free-rotating, it booted into portrait and the
+  player met the page's ROTATE YOUR DEVICE card instead of the game. The page
+  keeps that card, because in a mobile browser it is the only option.
+- **Hiding the system bars** — `setDecorFitsSystemWindows(false)` plus
+  `WindowInsetsControllerCompat.hide`, with `BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE`
+  so a swipe still reaches navigation, re-applied in `onWindowFocusChanged` or
+  the notification shade quietly costs it back.
+- **`LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES`.** Distinct from the above and
+  easy to conflate. Without it the window is *letterboxed away* from the display
+  cutout rather than drawing under it, so `env(safe-area-inset-*)` reports 0 on a
+  phone that visibly has a notch — `viewport-fit=cover` cannot help, because the
+  window never reaches the cutout in the first place.
+
+Together those took the WebView from 770×354 to 853×384 css and the game's
+scale from 0.4917 to 0.5333 — **+8.5%** — on the A73, where in landscape the
+cutout and the 3-button nav bar sit *beside* the game rather than above and
+below it.
+
+That makes the safe-area insets real, and `Viewport.resize` treats them as
+load-bearing: the 1280×720 box is fitted inside the **safe rect**, not the raw
+screen. On a 19.5:9 phone the pillarbox bars happen to be wide enough to swallow
+the cutout anyway; on a 16:9 one the fit is height-limited, there are no bars,
+and the cutout would land squarely on the HUD. `overscan` is still the whole
+screen, so backgrounds and the post chain keep painting under it.
+
+The page also teaches the right controls now: `HelpScene` and level 1's hint
+both pick on `game.input.scheme`, so a phone player is no longer told to hold
+the right mouse button.
+
 ## Open item
 
 `appId` in `capacitor.config.ts` is `com.placeholder.neonserpent` — a

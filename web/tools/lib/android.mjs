@@ -91,10 +91,30 @@ export async function launchAndAttach({ pkg, activity, port, ready, timeoutMs = 
   return { browser, page, release: () => adb("forward", "--remove", `tcp:${port}`) };
 }
 
-/** Lock rotation and set it. 0 = natural (portrait on a phone), 1 = landscape. */
+let priorAutoRotate = null;
+
+/**
+ * Lock rotation and set it. 0 = natural (portrait on a phone), 1 = landscape.
+ *
+ * Turning auto-rotate off is how `user_rotation` takes effect at all, but it is
+ * the user's phone: the first call remembers their setting so `restoreRotation`
+ * can hand it back. Leaving someone's auto-rotate disabled after a test run is
+ * a bug, just a quiet one.
+ */
 export function setRotation(r) {
+  if (priorAutoRotate === null) {
+    priorAutoRotate = adb("shell", "settings", "get", "system", "accelerometer_rotation").stdout.trim();
+  }
   adb("shell", "settings", "put", "system", "accelerometer_rotation", "0");
   adb("shell", "settings", "put", "system", "user_rotation", String(r));
+}
+
+/** Give auto-rotate back exactly as it was found. */
+export function restoreRotation() {
+  if (/^\d+$/.test(priorAutoRotate ?? "")) {
+    adb("shell", "settings", "put", "system", "accelerometer_rotation", priorAutoRotate);
+  }
+  priorAutoRotate = null;
 }
 
 /**

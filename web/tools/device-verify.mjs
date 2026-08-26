@@ -31,7 +31,7 @@
  *     is reported separately as a fact about the device, not a failure.
  */
 
-import { launchAndAttach, screencap, setRotation, sleep, adb, displaySize, keepAwake, isLocked } from "./lib/android.mjs";
+import { launchAndAttach, screencap, setRotation, sleep, adb, displaySize, keepAwake, isLocked, restoreRotation } from "./lib/android.mjs";
 
 const args = {};
 for (let i = 2; i < process.argv.length; i++) {
@@ -72,6 +72,7 @@ const wake = keepAwake();
 await sleep(1200);
 if (isLocked()) {
   wake();
+  restoreRotation();
   console.log(
     "\nRESULT: FAIL (the device is locked) - a lock screen leaves the page hidden, so " +
       "requestAnimationFrame never fires and game.time never moves, which looks exactly " +
@@ -132,6 +133,7 @@ RESULT: FAIL (page is ${live.vis}, game.time ${live.t}) - the game is not runnin
   await browser.disconnect();
   release();
   wake();
+  restoreRotation();
   process.exit(1);
 }
 
@@ -483,6 +485,7 @@ else bad(`${errs.length} uncaught error(s): ${errs.slice(0, 3).map((e) => e.msg)
 await browser.disconnect();
 release();
 wake();
+restoreRotation();
 
 if (notes.length) console.log(`\n${notes.length} note(s) above are informational, not failures.`);
 console.log(`\n${failures === 0 ? "RESULT: PASS" : `RESULT: FAIL (${failures})`}`);
